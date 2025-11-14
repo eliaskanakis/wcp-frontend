@@ -17,7 +17,7 @@ type NavSection = {
 
 const setupLinks: NavLink[] = [
   { title: "Users", href: "/setup/users" },
-  { title: "Rules per channel", href: "#" },
+  { title: "Rules per channel", href: "/setup/channels" },
 ];
 
 type HeaderUser = {
@@ -92,9 +92,12 @@ function Header({
     <header className="border-b border-slate-200 bg-white shadow-sm">
       <div className="mx-auto flex max-w-6xl flex-col px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between py-4">
-          <p className="text-lg font-semibold text-slate-900">
+          <Link
+            href="/"
+            className="text-lg font-semibold text-slate-900 transition hover:text-slate-600"
+          >
             Warehouse Coordination Platform
-          </p>
+          </Link>
           <nav className="hidden items-center gap-8 md:flex">
             {sections.map((section) => (
               <DesktopDropdown key={section.label} section={section} />

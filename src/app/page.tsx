@@ -1,6 +1,7 @@
 "use client";
 
 import { useChannels } from "@/context/ChannelsContext";
+import Link from "next/link";
 import type { Channel } from "@/types/channel";
 
 export default function Home() {
@@ -37,14 +38,14 @@ function ChannelCard({ channel }: { channel: Channel }) {
         <h2 className="text-xl font-semibold text-slate-900">
           {channel.name}
         </h2>
-        <button
-          type="button"
+        <Link
+          href={`/setup/channels/${channel.id}`}
           className="flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
           aria-label={`Configure ${channel.name}`}
         >
           <CogIcon />
           Configure
-        </button>
+        </Link>
       </div>
       <p className="mt-4 text-sm text-slate-600">{channel.description}</p>
     </article>
