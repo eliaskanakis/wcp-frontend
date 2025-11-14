@@ -23,17 +23,8 @@ type ChannelSeed = {
   rules: Record<string, unknown>;
 };
 
-const channelLinks: NavLink[] = [
-  { title: "Receiving", href: "#" },
-  { title: "Picking", href: "#" },
-  { title: "Packing", href: "#" },
-  { title: "Shipping", href: "#" },
-  { title: "Replenishment", href: "#" },
-  { title: "Returns", href: "#" },
-];
-
 const setupLinks: NavLink[] = [
-  { title: "Users", href: "#" },
+  { title: "Users", href: "/setup/users" },
   { title: "Rules per channel", href: "#" },
 ];
 
@@ -45,43 +36,61 @@ type HeaderUser = {
 export default function Home() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { profile, loading, logout } = useAuth();
+  const [channels, setChannels] = useState<ChannelSeed[]>([]);
+  const [channelsLoading, setChannelsLoading] = useState(true);
 
   useEffect(() => {
-    const seedChannels = async () => {
+    const syncChannels = async () => {
       try {
+        setChannelsLoading(true);
         const channelsDoc = doc(db, "config", "channels");
-        const snapshot = await getDoc(channelsDoc);
-        if (snapshot.exists()) {
-          return;
+        let snapshot = await getDoc(channelsDoc);
+        if (!snapshot.exists()) {
+          const response = await fetch("/default-channels.json", {
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            throw new Error("Unable to load default channels file.");
+          }
+
+          const data = (await response.json()) as ChannelSeed[];
+
+          await setDoc(channelsDoc, {
+            items: data,
+            seededAt: serverTimestamp(),
+          });
+
+          snapshot = await getDoc(channelsDoc);
         }
 
-        const response = await fetch("/default-channels.json", {
-          cache: "no-store",
-        });
-        if (!response.ok) {
-          throw new Error("Unable to load default channels file.");
-        }
-
-        const data = (await response.json()) as ChannelSeed[];
-
-        await setDoc(channelsDoc, {
-          items: data,
-          seededAt: serverTimestamp(),
-        });
+        const payload = snapshot.data();
+        const items = Array.isArray(payload?.items) ? payload?.items : [];
+        setChannels(items as ChannelSeed[]);
       } catch (error) {
-        console.error("Failed to seed initial channels", error);
+        console.error("Failed to sync channels", error);
+      } finally {
+        setChannelsLoading(false);
       }
     };
 
-    void seedChannels();
+    void syncChannels();
   }, []);
 
   const sections = useMemo<NavSection[]>(
     () => [
-      { label: "Channels", links: channelLinks },
+      {
+        label: "Channels",
+        links:
+          channels.length > 0
+            ? channels.map((channel) => ({
+                title: channel.name,
+                href: `#channel-${channel.id}`,
+              }))
+            : [{ title: "Loading...", href: "#" }],
+      },
       { label: "Setup", links: setupLinks },
     ],
-    []
+    [channels]
   );
 
   return (
@@ -101,29 +110,21 @@ export default function Home() {
           setMobileMenuOpen(false);
         }}
       />
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 lg:px-8">
-        <section className="rounded-2xl bg-white p-8 shadow-sm">
-          <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Welcome
-          </p>
-          <h1 className="mt-2 text-3xl font-bold text-slate-900">
-            Warehouse Coordination Platform
-          </h1>
-          <p className="mt-4 text-base text-slate-600">
-            Centralize every fulfillment channel with a single, responsive
-            workspace. Use the menu to review operational flows, manage users,
-            and adjust the rules that coordinate work on your floor.
-          </p>
-        </section>
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-10 sm:px-6 lg:px-8">
         <section className="grid gap-6 md:grid-cols-2">
-          <QuickCard
-            title="Monitor Channels"
-            description="Track throughput across receiving, picking, packing, shipping, replenishment, and returns."
-          />
-          <QuickCard
-            title="Configure Rules"
-            description="Adjust routing logic, priorities, and staffing guidelines per workflow."
-          />
+          {channelsLoading ? (
+            <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
+              Loading channels...
+            </div>
+          ) : channels.length === 0 ? (
+            <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
+              No channels configured yet.
+            </div>
+          ) : (
+            channels.map((channel) => (
+              <ChannelCard key={channel.id} channel={channel} />
+            ))
+          )}
         </section>
       </main>
       <Footer />
@@ -288,21 +289,27 @@ function MobileSection({ section }: { section: NavSection }) {
   );
 }
 
-function QuickCard({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
+function ChannelCard({ channel }: { channel: ChannelSeed }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-      <p className="mt-2 text-sm text-slate-600">{description}</p>
-      <button className="mt-4 text-sm font-semibold text-slate-900 underline-offset-4 hover:underline">
-        Explore
-      </button>
-    </div>
+    <article
+      id={`channel-${channel.id}`}
+      className="relative rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <h2 className="text-xl font-semibold text-slate-900">
+          {channel.name}
+        </h2>
+        <button
+          type="button"
+          className="flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+          aria-label={`Configure ${channel.name}`}
+        >
+          <CogIcon />
+          Configure
+        </button>
+      </div>
+      <p className="mt-4 text-sm text-slate-600">{channel.description}</p>
+    </article>
   );
 }
 
@@ -370,6 +377,24 @@ function ChevronIcon() {
         d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
         clipRule="evenodd"
       />
+    </svg>
+  );
+}
+
+function CogIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <path d="M19.5 12a7.5 7.5 0 00-.155-1.519l1.648-1.27-1.5-2.598-1.97.507a7.536 7.536 0 00-2.16-1.246L15 4h-3l-.363 1.874a7.535 7.535 0 00-2.16 1.246l-1.97-.507-1.5 2.598 1.648 1.27A7.5 7.5 0 004.5 12c0 .514.053 1.016.155 1.519l-1.648 1.27 1.5 2.598 1.97-.507a7.536 7.536 0 002.16 1.246L12 20h3l.363-1.874a7.536 7.536 0 002.16-1.246l1.97.507 1.5-2.598-1.648-1.27c.102-.503.155-1.005.155-1.519z" />
+      <circle cx="13.5" cy="12" r="1.5" />
     </svg>
   );
 }
