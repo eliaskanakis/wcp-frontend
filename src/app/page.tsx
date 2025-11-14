@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useAuth } from "@/context/AuthContext";
 
 type NavLink = {
   title: string;
@@ -27,9 +28,14 @@ const setupLinks: NavLink[] = [
   { title: "Rules per channel", href: "#" },
 ];
 
+type HeaderUser = {
+  name: string;
+  globalAdmin: boolean;
+};
+
 export default function Home() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { profile, loading, logout } = useAuth();
 
   const sections = useMemo<NavSection[]>(
     () => [
@@ -39,16 +45,22 @@ export default function Home() {
     []
   );
 
-  const user = isAuthenticated ? { name: "Alex Rivera" } : null;
-
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
       <Header
         sections={sections}
         mobileMenuOpen={mobileMenuOpen}
         setMobileMenuOpen={setMobileMenuOpen}
-        user={user}
-        onAuthToggle={() => setIsAuthenticated((prev) => !prev)}
+        user={
+          profile
+            ? { name: profile.name, globalAdmin: profile.globalAdmin }
+            : null
+        }
+        authLoading={loading}
+        onLogout={async () => {
+          await logout();
+          setMobileMenuOpen(false);
+        }}
       />
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 lg:px-8">
         <section className="rounded-2xl bg-white p-8 shadow-sm">
@@ -85,13 +97,15 @@ function Header({
   mobileMenuOpen,
   setMobileMenuOpen,
   user,
-  onAuthToggle,
+  authLoading,
+  onLogout,
 }: {
   sections: NavSection[];
   mobileMenuOpen: boolean;
   setMobileMenuOpen: (next: boolean) => void;
-  user: { name: string } | null;
-  onAuthToggle: () => void;
+  user: HeaderUser | null;
+  authLoading: boolean;
+  onLogout: () => Promise<void>;
 }) {
   return (
     <header className="border-b border-slate-200 bg-white shadow-sm">
@@ -112,23 +126,30 @@ function Header({
             </Link>
           </nav>
           <div className="flex items-center gap-3">
-            {user ? (
+            {authLoading ? (
+              <span className="h-10 w-28 animate-pulse rounded-full bg-slate-200" />
+            ) : user ? (
               <div className="flex items-center gap-3 text-sm">
-                <span className="font-medium text-slate-700">{user.name}</span>
+                <span className="font-medium text-slate-700">
+                  {user.name}
+                  {user.globalAdmin ? " (Admin)" : ""}
+                </span>
                 <button
-                  onClick={onAuthToggle}
+                  onClick={() => {
+                    void onLogout();
+                  }}
                   className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
                 >
                   Logout
                 </button>
               </div>
             ) : (
-              <button
-                onClick={onAuthToggle}
+              <Link
+                href="/login"
                 className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
               >
                 Login
-              </button>
+              </Link>
             )}
             <button
               className="rounded-full border border-slate-200 p-2 text-slate-600 transition hover:bg-slate-100 md:hidden"
@@ -151,6 +172,28 @@ function Header({
             >
               About
             </Link>
+            {!authLoading && (
+              <div>
+                {user ? (
+                  <button
+                    onClick={() => {
+                      void onLogout();
+                    }}
+                    className="w-full rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                  >
+                    Logout
+                  </button>
+                ) : (
+                  <Link
+                    href="/login"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="block w-full rounded-full bg-slate-900 px-4 py-2 text-center text-sm font-semibold text-white transition hover:bg-slate-700"
+                  >
+                    Login
+                  </Link>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
