@@ -1,0 +1,56 @@
+[
+    {
+        "id": "receiving",
+        "name": "Receiving",
+        "description": "Inbound of pallets and goods",
+        "rules": {
+            "maxUsers": 10,
+            "recordingAllowed": true
+        }
+    },
+    {
+        "id": "picking",
+        "name": "Picking",
+        "description": "Order picking",
+        "rules": {
+            "maxUsers": 20,
+            "recordingAllowed": true
+        }
+    },
+    {
+        "id": "packing",
+        "name": "Packing",
+        "description": "Order packing area",
+        "rules": {
+            "maxUsers": 20,
+            "recordingAllowed": false
+        }
+    },
+    {
+        "id": "shipping",
+        "name": "Shipping",
+        "description": "Order shipping",
+        "rules": {
+            "maxUsers": 20,
+            "recordingAllowed": false
+        }
+    },
+    {
+        "id": "replenishment",
+        "name": "Replenishment",
+        "description": "Picking location replenishment",
+        "rules": {
+            "maxUsers": 20,
+            "recordingAllowed": false
+        }
+    },
+    {
+        "id": "returns",
+        "name": "Returns",
+        "description": "Customer returns",
+        "rules": {
+            "maxUsers": 2,
+            "recordingAllowed": false
+        }
+    }
+]

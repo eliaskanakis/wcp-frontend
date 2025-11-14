@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { useAuth } from "@/context/AuthContext";
+import { db } from "@/lib/firebase";
 
 type NavLink = {
   title: string;
@@ -12,6 +14,13 @@ type NavLink = {
 type NavSection = {
   label: string;
   links: NavLink[];
+};
+
+type ChannelSeed = {
+  id: string;
+  name: string;
+  description: string;
+  rules: Record<string, unknown>;
 };
 
 const channelLinks: NavLink[] = [
@@ -36,6 +45,36 @@ type HeaderUser = {
 export default function Home() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { profile, loading, logout } = useAuth();
+
+  useEffect(() => {
+    const seedChannels = async () => {
+      try {
+        const channelsDoc = doc(db, "config", "channels");
+        const snapshot = await getDoc(channelsDoc);
+        if (snapshot.exists()) {
+          return;
+        }
+
+        const response = await fetch("/default-channels.json", {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error("Unable to load default channels file.");
+        }
+
+        const data = (await response.json()) as ChannelSeed[];
+
+        await setDoc(channelsDoc, {
+          items: data,
+          seededAt: serverTimestamp(),
+        });
+      } catch (error) {
+        console.error("Failed to seed initial channels", error);
+      }
+    };
+
+    void seedChannels();
+  }, []);
 
   const sections = useMemo<NavSection[]>(
     () => [
@@ -208,7 +247,8 @@ function DesktopDropdown({ section }: { section: NavSection }) {
         <span>{section.label}</span>
         <ChevronIcon />
       </button>
-      <div className="invisible absolute left-0 top-full z-10 mt-3 w-48 rounded-xl border border-slate-100 bg-white p-3 text-sm opacity-0 shadow-lg transition duration-200 group-hover:visible group-hover:opacity-100">
+      <div className="pointer-events-auto absolute left-0 top-full z-10 h-3 w-full" aria-hidden />
+      <div className="invisible absolute left-0 top-full z-20 mt-3 w-48 rounded-xl border border-slate-100 bg-white p-3 text-sm opacity-0 shadow-lg transition duration-200 group-hover:visible group-hover:opacity-100">
         <ul className="space-y-2">
           {section.links.map((link) => (
             <li key={link.title}>
