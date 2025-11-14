@@ -56,15 +56,13 @@ export default function UsersPage() {
   }, [users]);
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 px-4 py-10 sm:px-6 lg:px-8">
-      <section className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-10 sm:px-6 lg:px-8">
+      <section>
         <header>
           <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Setup
           </p>
           <h1 className="mt-1 text-3xl font-bold text-slate-900">Users</h1>
           <p className="mt-2 text-sm text-slate-600">
-            Review everyone who can access the Warehouse Coordination Platform.
           </p>
         </header>
         <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
