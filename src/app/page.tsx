@@ -227,7 +227,7 @@ function Footer() {
   return (
     <footer className="border-t border-slate-200 bg-white">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-        <p>&copy; {new Date().getFullYear()} Warehouse Coordination Platform</p>
+        <p>&copy; {new Date().getFullYear()} Warehouse Coordination Platform 0.1</p>
         <Link
           href="#"
           className="font-medium text-slate-600 transition hover:text-slate-900"
