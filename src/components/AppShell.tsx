@@ -38,7 +38,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           channels.length > 0
             ? channels.map((channel) => ({
                 title: channel.name,
-                href: `#channel-${channel.id}`,
+                href: `/chat/${channel.id}`,
               }))
             : [
                 {

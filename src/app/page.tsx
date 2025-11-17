@@ -38,16 +38,23 @@ function ChannelCard({ channel }: { channel: Channel }) {
         <h2 className="text-xl font-semibold text-slate-900">
           {channel.name}
         </h2>
+      </div>
+      <p className="mt-4 text-sm text-slate-600">{channel.description}</p>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Link
+          href={`/chat/${channel.id}`}
+          className="flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+        >
+          Open Chat
+        </Link>
         <Link
           href={`/setup/channels/${channel.id}`}
-          className="flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
-          aria-label={`Configure ${channel.name}`}
+          className="flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
         >
           <CogIcon />
           Configure
         </Link>
       </div>
-      <p className="mt-4 text-sm text-slate-600">{channel.description}</p>
     </article>
   );
 }
