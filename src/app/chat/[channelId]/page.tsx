@@ -1,30 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { use, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
+import { doc, updateDoc } from "firebase/firestore";
 import { useAuth } from "@/context/AuthContext";
 import { useChannels } from "@/context/ChannelsContext";
-import { auth } from "@/lib/firebase";
-import { canViewChannel } from "@/utils/channelAccess";
+import { auth, db } from "@/lib/firebase";
+import { canViewChannel, isChannelAdmin } from "@/utils/channelAccess";
 
 type ChatPageProps = {
   params: Promise<{ channelId: string }>;
 };
 
-const WS_URL =
-  process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000";
 
 type ChatMessage =
   | { type: "system"; text: string; ts?: number }
   | { type: "systemError"; text: string; ts?: number }
   | { type: "chat"; from: string; text: string; ts: number };
 
+type RosterUser = {
+  userId: string;
+  username: string;
+};
+
 type OutboundMessage = {
-  type: 'join' | 'chat';
+  type: "join" | "chat" | "fetch-history";
   channelId: string;
   firebaseUserIdToken: string | null;
   from: string;
   text: string | null;
+  beforeTs?: number;
 };
 
 export default function ChannelChatPage({ params }: ChatPageProps) {
@@ -32,125 +38,263 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
     "connecting" | "connected" | "disconnected" | "error"
   >("connecting");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [rosterOpen, setRosterOpen] = useState(true);
+  const [roster, setRoster] = useState<RosterUser[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const oldestMessageTsRef = useRef<number | null>(null);
+  const stickToBottomRef = useRef(true);
+  const pendingHistoryRef = useRef<{ pending: boolean; prevHeight: number }>({
+    pending: false,
+    prevHeight: 0,
+  });
 
-  const resolvedParams = use(params);
-  const channelId = resolvedParams.channelId;
-  const { channels, loading } = useChannels();
+  const resolved = use(params);
+  const channelId = resolved.channelId;
+  const { channels, loading, refresh } = useChannels();
   const { profile } = useAuth();
   const senderName = profile?.name?.trim() || "Anonymous";
   const channel = channels.find((item) => item.id === channelId);
   const canView = channel ? canViewChannel(channel, profile ?? null) : false;
+  const isAdmin = channel ? isChannelAdmin(channel, profile ?? null) : false;
+
+  const sendSocketPayload = useCallback((payload: OutboundMessage) => {
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(payload));
+  }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !canView) return; // Only run in browser
+    if (typeof window === "undefined" || !canView) return;
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
     ws.onopen = async () => {
-      setStatus('connected');
+      setStatus("connected");
       let token: string | null = null;
       if (auth.currentUser) {
         try {
           token = await auth.currentUser.getIdToken();
         } catch (error) {
-          console.error('Failed to fetch user token', error);
+          console.error("Failed to fetch user token", error);
         }
       }
-      sendSocketPayload(ws, {
-        type: 'join',
+      sendSocketPayload({
+        type: "join",
         channelId,
-        firebaseUserIdToken: token,
         from: senderName,
+        firebaseUserIdToken: token,
         text: null,
       });
     };
-    ws.onclose = () => {
-      setStatus('disconnected');
-    };
-    ws.onerror = () => {
-      setStatus('disconnected');
-    };
+    ws.onclose = () => setStatus("disconnected");
+    ws.onerror = () => setStatus("disconnected");
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'system') {
+        if (msg.type === "system") {
           setMessages((prev) => [
             ...prev,
-            { type: 'system', text: msg.text, ts: msg.ts ?? Date.now() },
+            { type: "system", text: msg.text, ts: msg.ts ?? Date.now() },
           ]);
-        } else if (msg.type === 'error') {
+        } else if (msg.type === "error") {
           setStatus("error");
           setMessages((prev) => [
             ...prev,
             {
-              type: 'systemError',
+              type: "systemError",
               text: `Error: ${msg.text ?? "Unknown error"}`,
               ts: msg.ts ?? Date.now(),
             },
           ]);
-        } else if (msg.type === 'chat') {
+        } else if (msg.type === "chat") {
           setMessages((prev) => [
             ...prev,
             {
-              type: 'chat',
+              type: "chat",
               from: msg.from,
               text: msg.text,
               ts: msg.ts ?? Date.now(),
             },
           ]);
+        } else if (msg.type === "channel-history") {
+          const nextMessages =
+            Array.isArray(msg.messages) && msg.messages.length > 0
+              ? [...msg.messages]
+                  .map(
+                    (item: {
+                      text: string;
+                      from: string;
+                      ts: number;
+                      type: string;
+                    }) => ({
+                      type: "chat" as const,
+                      text: item.text,
+                      from: item.from,
+                      ts: item.ts,
+                    })
+                  )
+                  .sort((a, b) => a.ts - b.ts)
+              : [];
+          setMessages((prev) => [...nextMessages, ...prev]);
+          if (nextMessages.length > 0) {
+            oldestMessageTsRef.current =
+              nextMessages[0].ts;
+          }
+          setHistoryLoaded(true);
+        } else if (msg.type === "channel-users") {
+          setRoster(
+            Array.isArray(msg.users)
+              ? msg.users.map((user: RosterUser) => ({
+                  userId: user.userId,
+                  username: user.username,
+                }))
+              : []
+          );
+        } else if (msg.type === "user-joined") {
+          setRoster((prev) => {
+            if (prev.some((user) => user.userId === msg.userId)) {
+              return prev;
+            }
+            return [
+              ...prev,
+              { userId: msg.userId, username: msg.username },
+            ];
+          });
+        } else if (msg.type === "user-left") {
+          setRoster((prev) =>
+            prev.filter((user) => user.userId !== msg.userId)
+          );
         }
-      } catch (e) {
-        console.error('Invalid message', e);
+      } catch (error) {
+        console.error("Invalid websocket payload", error);
       }
     };
-
-    // cleanup on unmount
     return () => {
       ws.close();
     };
-  }, [canView, channelId, senderName]);
+  }, [canView, channelId, senderName, sendSocketPayload]);
 
   useEffect(() => {
-    if (!messagesRef.current) return;
-    messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    const container = messagesRef.current;
+    if (!container) return;
+    if (pendingHistoryRef.current.pending) {
+      const delta =
+        container.scrollHeight - pendingHistoryRef.current.prevHeight;
+      container.scrollTop = delta;
+      pendingHistoryRef.current.pending = false;
+      return;
+    }
+    if (!stickToBottomRef.current) return;
+    container.scrollTop = container.scrollHeight;
   }, [messages]);
 
-  const sendMessage = async () => {
+  const handleHistoryRequest = useCallback(() => {
+    if (!historyLoaded || !oldestMessageTsRef.current) {
+      return;
+    }
+    sendSocketPayload({
+      type: "fetch-history",
+      channelId,
+      from: senderName,
+      firebaseUserIdToken: null,
+      text: null,
+      beforeTs: oldestMessageTsRef.current,
+    });
+  }, [channelId, historyLoaded, sendSocketPayload, senderName]);
+
+  useEffect(() => {
+    const container = messagesRef.current;
+    if (!container) return;
+    const handleScroll = () => {
+      if (container.scrollTop === 0) {
+        if (!pendingHistoryRef.current.pending) {
+          pendingHistoryRef.current = {
+            pending: true,
+            prevHeight: container.scrollHeight,
+          };
+        }
+        handleHistoryRequest();
+      }
+      const distanceFromBottom =
+        container.scrollHeight - (container.scrollTop + container.clientHeight);
+      stickToBottomRef.current = distanceFromBottom < 80;
+    };
+    container.addEventListener("scroll", handleScroll);
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+    };
+  }, [handleHistoryRequest]);
+
+  const handleRemoveUser = useCallback(
+    async (userId: string) => {
+      if (!channel || !profile) return;
+      if (!isAdmin) return;
+      try {
+        const updatedMembers =
+          channel.members?.map((member) =>
+            member.userId === userId ? { ...member, isBlocked: true } : member
+          ) ?? [];
+        const channelDocRef = doc(db, "config", "channels");
+        await updateDoc(channelDocRef, {
+          items: channels.map((item) =>
+            item.id === channel.id
+              ? { ...item, members: updatedMembers }
+              : item
+          ),
+        });
+        await refresh();
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "system",
+            text: `Blocked user ${userId}`,
+            ts: Date.now(),
+          },
+        ]);
+      } catch (error) {
+        console.error("Failed to block user", error);
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "systemError",
+            text: "Unable to block this user. Try again later.",
+            ts: Date.now(),
+          },
+        ]);
+      }
+    },
+    [channel, channels, isAdmin, profile, refresh]
+  );
+
+  const sendMessage = useCallback(async () => {
     const text = input.trim();
     if (!text || !canView) return;
-    const socket = wsRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
     let token: string | null = null;
     if (auth.currentUser) {
       try {
         token = await auth.currentUser.getIdToken();
       } catch (error) {
-        console.error('Failed to fetch user token', error);
+        console.error("Failed to fetch user token", error);
       }
     }
-
-    sendSocketPayload(socket, {
-      type: 'chat',
+    sendSocketPayload({
+      type: "chat",
       channelId,
       firebaseUserIdToken: token,
       from: senderName,
       text,
     });
+    setInput("");
+  }, [canView, channelId, input, sendSocketPayload, senderName]);
 
-    setInput('');
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
       void sendMessage();
     }
   };
-
 
   if (loading) {
     return (
@@ -219,11 +363,13 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
                 No messages yet. Start the conversation!
               </div>
             )}
-            {messages.map((m, idx) => {
+            {messages.map((message, idx) => {
               const time =
-                "ts" in m && m.ts ? new Date(m.ts).toLocaleTimeString() : "";
-              if (m.type === "system" || m.type === "systemError") {
-                const isError = m.type === "systemError";
+                "ts" in message && message.ts
+                  ? new Date(message.ts).toLocaleTimeString()
+                  : "";
+              if (message.type === "system" || message.type === "systemError") {
+                const isError = message.type === "systemError";
                 return (
                   <div
                     key={idx}
@@ -233,15 +379,17 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
                         : "border-slate-200 bg-white/80 text-slate-500"
                     }`}
                   >
-                    [{time}] {m.text}
+                    [{time}] {message.text}
                   </div>
                 );
               }
-              const isOwn = m.from === senderName;
+              const isOwn = message.from === senderName;
               return (
                 <div
                   key={idx}
-                  className={`flex ${isOwn ? "justify-end" : "justify-start"}`}
+                  className={`flex ${
+                    isOwn ? "justify-end" : "justify-start"
+                  }`}
                 >
                   <div
                     className={`w-full max-w-md rounded-2xl p-4 shadow-sm ${
@@ -256,7 +404,7 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
                           isOwn ? "text-white/80" : "text-slate-500"
                         }`}
                       >
-                        {m.from}
+                        {message.from}
                       </span>
                       <span
                         className={isOwn ? "text-white/60" : "text-slate-400"}
@@ -264,7 +412,7 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
                         {time}
                       </span>
                     </div>
-                    <p className="mt-2 text-sm">{m.text}</p>
+                    <p className="mt-2 text-sm">{message.text}</p>
                   </div>
                 </div>
               );
@@ -275,7 +423,7 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
               className="flex-1 rounded-2xl border border-slate-200 px-4 py-2 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
               placeholder="Type a message and hit Enter"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
             />
             <button
@@ -298,25 +446,42 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Active users
             </p>
-            <span className="text-xs font-semibold text-slate-400">2</span>
+            <span className="text-xs font-semibold text-slate-400">
+              {roster.length}
+            </span>
           </div>
           <ul className="mt-4 space-y-3 text-sm">
-            <li className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 shadow-sm">
-              <p className="font-semibold text-slate-900">Fake user 1</p>
-              <p className="text-xs text-slate-500">Warehouse Floor</p>
-            </li>
-            <li className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 shadow-sm">
-              <p className="font-semibold text-slate-900">Fake user 2</p>
-              <p className="text-xs text-slate-500">Supervisor</p>
-            </li>
+            {roster.length > 0 ? (
+              roster.map((user) => (
+                <li
+                  key={user.userId}
+                  className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 shadow-sm"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-semibold text-slate-900">
+                      {user.username}
+                    </p>
+                    {isAdmin && (
+                      <button
+                        onClick={() => {
+                          void handleRemoveUser(user.userId);
+                        }}
+                        className="rounded-full border border-rose-100 px-3 py-1 text-xs font-semibold text-rose-500 transition hover:border-rose-200 hover:text-rose-600"
+                      >
+                        Block
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))
+            ) : (
+              <li className="rounded-xl border border-dashed border-slate-200 bg-white/60 px-3 py-2 text-center text-xs text-slate-400">
+                No active users
+              </li>
+            )}
           </ul>
         </aside>
       </section>
     </div>
   );
-}
-
-function sendSocketPayload(socket: WebSocket | null, payload: OutboundMessage) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify(payload));
 }
