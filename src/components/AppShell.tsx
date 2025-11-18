@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useChannels } from "@/context/ChannelsContext";
+import { canViewChannel, isChannelAdmin } from "@/utils/channelAccess";
 
 type NavLink = {
   title: string;
@@ -15,11 +16,6 @@ type NavSection = {
   links: NavLink[];
 };
 
-const setupLinks: NavLink[] = [
-  { title: "Users", href: "/setup/users" },
-  { title: "Rules per channel", href: "/setup/channels" },
-];
-
 type HeaderUser = {
   name: string;
   globalAdmin: boolean;
@@ -30,26 +26,51 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { channels, loading: channelsLoading } = useChannels();
   const { profile, loading: authLoading, logout } = useAuth();
 
+  const accessibleChannels = useMemo(
+    () =>
+      channels.filter((channel) => canViewChannel(channel, profile ?? null)),
+    [channels, profile]
+  );
+
+  const canManageChannels = useMemo(
+    () =>
+      Boolean(
+        profile?.globalAdmin ||
+          channels.some((channel) => isChannelAdmin(channel, profile ?? null))
+      ),
+    [channels, profile]
+  );
+
+  const setupLinks = useMemo<NavLink[]>(() => {
+    const links: NavLink[] = [{ title: "Users", href: "/setup/users" }];
+    if (canManageChannels) {
+      links.push({ title: "Rules per channel", href: "/setup/channels" });
+    }
+    return links;
+  }, [canManageChannels]);
+
   const sections = useMemo<NavSection[]>(
     () => [
       {
         label: "Channels",
         links:
-          channels.length > 0
-            ? channels.map((channel) => ({
+          accessibleChannels.length > 0
+            ? accessibleChannels.map((channel) => ({
                 title: channel.name,
                 href: `/chat/${channel.id}`,
               }))
             : [
                 {
-                  title: channelsLoading ? "Loading..." : "No channels",
+                  title: channelsLoading
+                    ? "Loading..."
+                    : "No accessible channels",
                   href: "#",
                 },
               ],
       },
       { label: "Setup", links: setupLinks },
     ],
-    [channels, channelsLoading]
+    [accessibleChannels, channelsLoading, setupLinks]
   );
 
   return (

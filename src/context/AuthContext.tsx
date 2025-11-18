@@ -26,7 +26,7 @@ import {
 } from "react";
 import { auth, db } from "@/lib/firebase";
 
-type UserProfile = {
+export type UserProfile = {
   uid: string;
   email: string | null;
   name: string;

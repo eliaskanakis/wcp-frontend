@@ -66,7 +66,7 @@ export default function UsersPage() {
           </p>
         </header>
         <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <div className="grid grid-cols-12 border-b border-slate-100 bg-slate-50/60 px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <div className="hidden grid-cols-12 border-b border-slate-100 bg-slate-50/60 px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 sm:grid">
             <span className="col-span-5">Email</span>
             <span className="col-span-4">Name</span>
             <span className="col-span-3 text-center">Global Admin</span>
@@ -84,23 +84,30 @@ export default function UsersPage() {
               {sortedUsers.map((user) => (
                 <li
                   key={user.id}
-                  className="grid grid-cols-12 items-center border-t border-slate-100 px-6 py-4 text-sm text-slate-700"
+                  className="border-t border-slate-100 px-6 py-4 text-sm text-slate-700"
                 >
-                  <span className="col-span-5 font-medium text-slate-900">
-                    {user.email}
-                  </span>
-                  <span className="col-span-4">{user.name}</span>
-                  <span className="col-span-3 flex justify-center">
-                    <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 accent-slate-900"
-                        checked={user.globalAdmin}
-                        readOnly
-                      />
-                      Admin
-                    </label>
-                  </span>
+                  <div className="flex flex-col gap-2 sm:grid sm:grid-cols-12 sm:items-center sm:gap-0">
+                    <span className="font-medium text-slate-900 sm:col-span-5">
+                      {user.email}
+                    </span>
+                    <span className="text-slate-600 sm:col-span-4">
+                      {user.name}
+                    </span>
+                    <span className="sm:col-span-3 sm:flex sm:justify-center">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 sm:hidden">
+                        Global Admin
+                      </span>
+                      <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 sm:w-auto">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-slate-900"
+                          checked={user.globalAdmin}
+                          readOnly
+                        />
+                        Admin
+                      </label>
+                    </span>
+                  </div>
                 </li>
               ))}
             </ul>

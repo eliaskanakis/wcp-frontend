@@ -5,6 +5,7 @@ import { use, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useChannels } from "@/context/ChannelsContext";
 import { auth } from "@/lib/firebase";
+import { canViewChannel } from "@/utils/channelAccess";
 
 type ChatPageProps = {
   params: Promise<{ channelId: string }>;
@@ -36,12 +37,11 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
   const { channels, loading } = useChannels();
   const { profile } = useAuth();
   const senderName = profile?.name?.trim() || "Anonymous";
-  const channel = channels.find(
-    (item) => item.id === channelId
-  );
+  const channel = channels.find((item) => item.id === channelId);
+  const canView = channel ? canViewChannel(channel, profile ?? null) : false;
 
   useEffect(() => {
-    if (typeof window === 'undefined') return; // Only run in browser
+    if (typeof window === 'undefined' || !canView) return; // Only run in browser
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
     ws.onopen = async () => {
@@ -96,11 +96,11 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
     return () => {
       ws.close();
     };
-  }, [channelId, senderName]);
+  }, [canView, channelId, senderName]);
 
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text) return;
+    if (!text || !canView) return;
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
@@ -142,11 +142,11 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
     );
   }
 
-  if (!channel) {
+  if (!channel || !canView) {
     return (
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-10 sm:px-6 lg:px-8">
         <p className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center text-sm text-rose-600 shadow-sm">
-          Channel not found.
+          You do not have access to this channel.
         </p>
         <Link
           href="/"

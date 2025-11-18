@@ -1,11 +1,20 @@
 "use client";
 
-import { useChannels } from "@/context/ChannelsContext";
+import { useMemo } from "react";
 import Link from "next/link";
+import { useAuth } from "@/context/AuthContext";
+import { useChannels } from "@/context/ChannelsContext";
 import type { Channel } from "@/types/channel";
+import { canViewChannel, isChannelAdmin } from "@/utils/channelAccess";
 
 export default function Home() {
   const { channels, loading } = useChannels();
+  const { profile } = useAuth();
+
+  const accessibleChannels = useMemo(
+    () => channels.filter((channel) => canViewChannel(channel, profile ?? null)),
+    [channels, profile]
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-10 sm:px-6 lg:px-8">
@@ -14,13 +23,17 @@ export default function Home() {
           <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
             Loading channels...
           </div>
-        ) : channels.length === 0 ? (
+        ) : accessibleChannels.length === 0 ? (
           <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
-            No channels configured yet.
+            No accessible channels yet.
           </div>
         ) : (
-          channels.map((channel) => (
-            <ChannelCard key={channel.id} channel={channel} />
+          accessibleChannels.map((channel) => (
+            <ChannelCard
+              key={channel.id}
+              channel={channel}
+              canConfigure={isChannelAdmin(channel, profile ?? null)}
+            />
           ))
         )}
       </section>
@@ -28,7 +41,13 @@ export default function Home() {
   );
 }
 
-function ChannelCard({ channel }: { channel: Channel }) {
+function ChannelCard({
+  channel,
+  canConfigure,
+}: {
+  channel: Channel;
+  canConfigure: boolean;
+}) {
   return (
     <article
       id={`channel-${channel.id}`}
@@ -47,13 +66,15 @@ function ChannelCard({ channel }: { channel: Channel }) {
         >
           Open Chat
         </Link>
-        <Link
-          href={`/setup/channels/${channel.id}`}
-          className="flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
-        >
-          <CogIcon />
-          Configure
-        </Link>
+        {canConfigure && (
+          <Link
+            href={`/setup/channels/${channel.id}`}
+            className="flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+          >
+            <CogIcon />
+            Configure
+          </Link>
+        )}
       </div>
     </article>
   );
@@ -66,13 +87,15 @@ function CogIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
       className="h-5 w-5"
     >
-      <path d="M19.5 12a7.5 7.5 0 00-.155-1.519l1.648-1.27-1.5-2.598-1.97.507a7.536 7.536 0 00-2.16-1.246L15 4h-3l-.363 1.874a7.535 7.535 0 00-2.16 1.246l-1.97-.507-1.5 2.598 1.648 1.27A7.5 7.5 0 004.5 12c0 .514.053 1.016.155 1.519l-1.648 1.27 1.5 2.598 1.97-.507a7.536 7.536 0 002.16 1.246L12 20h3l.363-1.874a7.536 7.536 0 002.16-1.246l1.97.507 1.5-2.598-1.648-1.27c.102-.503.155-1.005.155-1.519z" />
-      <circle cx="13.5" cy="12" r="1.5" />
+      <g transform="scale(0.8) translate(3,3)">
+        <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </g>
     </svg>
   );
 }

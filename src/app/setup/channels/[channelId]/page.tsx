@@ -4,9 +4,11 @@ import { notFound, usePathname } from "next/navigation";
 import Link from "next/link";
 import { use, useEffect, useMemo, useState } from "react";
 import { collection, doc, getDocs, updateDoc } from "firebase/firestore";
+import { useAuth } from "@/context/AuthContext";
 import { useChannels } from "@/context/ChannelsContext";
 import { db } from "@/lib/firebase";
 import type { Channel, ChannelMember, ChannelRole } from "@/types/channel";
+import { isChannelAdmin } from "@/utils/channelAccess";
 
 type ChannelPageProps = {
   params: Promise<{ channelId: string }>;
@@ -15,9 +17,13 @@ type ChannelPageProps = {
 export default function ChannelDetailsPage({ params }: ChannelPageProps) {
   const resolvedParams = use(params);
   const { channels, refresh } = useChannels();
+  const { profile } = useAuth();
   const pathname = usePathname();
   const channel =
     channels.find((item) => item.id === resolvedParams.channelId) ?? null;
+  const userCanEdit = channel
+    ? isChannelAdmin(channel, profile ?? null)
+    : Boolean(profile?.globalAdmin);
 
   const [description, setDescription] = useState(channel?.description ?? "");
   const [maxUsers, setMaxUsers] = useState(
@@ -111,6 +117,22 @@ export default function ChannelDetailsPage({ params }: ChannelPageProps) {
       );
     }
     notFound();
+  }
+
+  if (channel && !userCanEdit) {
+    return (
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-10 sm:px-6 lg:px-8">
+        <p className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center text-sm text-rose-600 shadow-sm">
+          You are not authorized to manage this channel.
+        </p>
+        <Link
+          href="/setup/channels"
+          className="text-center text-sm font-semibold text-slate-900 underline-offset-4 hover:underline"
+        >
+          Back to channels
+        </Link>
+      </div>
+    );
   }
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
