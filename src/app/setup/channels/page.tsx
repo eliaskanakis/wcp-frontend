@@ -94,9 +94,9 @@ function CogIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      stroke-width="1.5"
-      stroke-linecap="round"
-      stroke-linejoin="round"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       className="h-5 w-5"
     >
       <g transform="scale(0.8) translate(3,3)">
