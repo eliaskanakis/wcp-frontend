@@ -76,6 +76,15 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
             ...prev,
             { type: 'system', text: msg.text, ts: msg.ts ?? Date.now() },
           ]);
+        } else if (msg.type === 'error') {
+          setMessages((prev) => [
+            ...prev,
+            {
+              type: 'system',
+              text: `Error: ${msg.text ?? "Unknown error"}`,
+              ts: msg.ts ?? Date.now(),
+            },
+          ]);
         } else if (msg.type === 'chat') {
           setMessages((prev) => [
             ...prev,
