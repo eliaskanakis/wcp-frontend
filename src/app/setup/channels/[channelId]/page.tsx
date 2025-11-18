@@ -26,6 +26,7 @@ export default function ChannelDetailsPage({ params }: ChannelPageProps) {
   const [recordingAllowed, setRecordingAllowed] = useState(
     Boolean(channel?.rules?.recordingAllowed)
   );
+  const [isPublic, setIsPublic] = useState(Boolean(channel?.isPublic));
   const [members, setMembers] = useState<ChannelMember[]>(
     channel?.members ?? []
   );
@@ -43,7 +44,13 @@ export default function ChannelDetailsPage({ params }: ChannelPageProps) {
     setDescription(channel.description);
     setMaxUsers(Number(channel.rules?.maxUsers) || 0);
     setRecordingAllowed(Boolean(channel.rules?.recordingAllowed));
-    setMembers(channel.members ?? []);
+    setIsPublic(Boolean(channel.isPublic));
+    setMembers(
+      (channel.members ?? []).map((member) => ({
+        ...member,
+        isBlocked: Boolean(member.isBlocked),
+      }))
+    );
   }, [channel]);
 
   useEffect(() => {
@@ -82,6 +89,7 @@ export default function ChannelDetailsPage({ params }: ChannelPageProps) {
   const memberDetails = useMemo(() => {
     return members.map((member) => ({
       ...member,
+      isBlocked: Boolean(member.isBlocked),
       user: users.find((user) => user.id === member.userId),
     }));
   }, [members, users]);
@@ -124,6 +132,7 @@ export default function ChannelDetailsPage({ params }: ChannelPageProps) {
         description,
         rules: updatedRules,
         members,
+        isPublic,
       };
 
       await updateDoc(channelDocRef, {
@@ -257,6 +266,20 @@ export default function ChannelDetailsPage({ params }: ChannelPageProps) {
                 Enable
               </label>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700">
+                Public Channel
+              </label>
+              <label className="mt-2 inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={isPublic}
+                  onChange={(event) => setIsPublic(event.target.checked)}
+                  className="h-4 w-4 accent-slate-900"
+                />
+                Anyone can view
+              </label>
+            </div>
           </div>
           <div>
             <div className="flex items-center justify-between">
@@ -305,6 +328,24 @@ export default function ChannelDetailsPage({ params }: ChannelPageProps) {
                         <option value="observer">Observer</option>
                       </select>
                     </div>
+                    <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={member.isBlocked ?? false}
+                        onChange={(event) => {
+                          const checked = event.target.checked;
+                          setMembers((prev) =>
+                            prev.map((entry) =>
+                              entry.userId === member.userId
+                                ? { ...entry, isBlocked: checked }
+                                : entry
+                            )
+                          );
+                        }}
+                        className="h-4 w-4 accent-rose-500"
+                      />
+                      Blocked
+                    </label>
                     <button
                       type="button"
                       onClick={() => handleRemoveMember(member.userId)}

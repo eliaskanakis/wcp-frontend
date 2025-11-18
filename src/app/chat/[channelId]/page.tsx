@@ -4,6 +4,7 @@ import Link from "next/link";
 import { use, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useChannels } from "@/context/ChannelsContext";
+import { auth } from "@/lib/firebase";
 
 type ChatPageProps = {
   params: Promise<{ channelId: string }>;
@@ -16,6 +17,14 @@ type ChatMessage =
   | { type: 'system'; text: string; ts?: number }
   | { type: 'chat'; from: string; text: string; ts: number };
 
+type OutboundMessage = {
+  type: 'join' | 'chat';
+  channelId: string;
+  firebaseUserIdToken: string | null;
+  from: string;
+  text: string | null;
+};
+
 export default function ChannelChatPage({ params }: ChatPageProps) {
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -23,19 +32,35 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
   const wsRef = useRef<WebSocket | null>(null);
 
   const resolvedParams = use(params);
+  const channelId = resolvedParams.channelId;
   const { channels, loading } = useChannels();
   const { profile } = useAuth();
   const senderName = profile?.name?.trim() || "Anonymous";
   const channel = channels.find(
-    (item) => item.id === resolvedParams.channelId
+    (item) => item.id === channelId
   );
 
   useEffect(() => {
     if (typeof window === 'undefined') return; // Only run in browser
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
-    ws.onopen = () => {
+    ws.onopen = async () => {
       setStatus('connected');
+      let token: string | null = null;
+      if (auth.currentUser) {
+        try {
+          token = await auth.currentUser.getIdToken();
+        } catch (error) {
+          console.error('Failed to fetch user token', error);
+        }
+      }
+      sendSocketPayload(ws, {
+        type: 'join',
+        channelId,
+        firebaseUserIdToken: token,
+        from: senderName,
+        text: null,
+      });
     };
     ws.onclose = () => {
       setStatus('disconnected');
@@ -71,20 +96,30 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
     return () => {
       ws.close();
     };
-  }, []);
+  }, [channelId, senderName]);
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const text = input.trim();
     if (!text) return;
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
-    wsRef.current.send(
-      JSON.stringify({
-        type: 'chat',
-        from: senderName,
-        text,
-      }),
-    );
+    let token: string | null = null;
+    if (auth.currentUser) {
+      try {
+        token = await auth.currentUser.getIdToken();
+      } catch (error) {
+        console.error('Failed to fetch user token', error);
+      }
+    }
+
+    sendSocketPayload(socket, {
+      type: 'chat',
+      channelId,
+      firebaseUserIdToken: token,
+      from: senderName,
+      text,
+    });
 
     setInput('');
   };
@@ -92,7 +127,7 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      sendMessage();
+      void sendMessage();
     }
   };
 
@@ -180,7 +215,9 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
             />
             <button
               className="px-4 py-2 rounded bg-blue-600 text-white disabled:bg-gray-400"
-              onClick={sendMessage}
+              onClick={() => {
+                void sendMessage();
+              }}
               disabled={status !== 'connected'}
             >
               Send
@@ -192,8 +229,7 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
   );
 }
 
-
-
-
-
-
+function sendSocketPayload(socket: WebSocket | null, payload: OutboundMessage) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify(payload));
+}

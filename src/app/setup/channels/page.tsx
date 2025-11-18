@@ -21,7 +21,8 @@ export default function ChannelsPage() {
       <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
         <div className="grid grid-cols-12 border-b border-slate-100 bg-slate-50/60 px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
           <span className="col-span-4">Channel</span>
-          <span className="col-span-6">Description</span>
+          <span className="col-span-5">Description</span>
+          <span className="col-span-1 text-center">Public</span>
           <span className="col-span-2 text-center">Actions</span>
         </div>
         {loading ? (
@@ -50,7 +51,12 @@ function ChannelRow({ channel }: { channel: Channel }) {
       <span className="col-span-4 font-semibold text-slate-900">
         {channel.name}
       </span>
-      <span className="col-span-6 text-slate-600">{channel.description}</span>
+      <span className="col-span-5 text-slate-600">{channel.description}</span>
+      <span className="col-span-1 flex justify-center">
+        <span className="rounded-full border border-slate-200 px-3 py-0.5 text-xs font-semibold text-slate-600">
+          {channel.isPublic ? "Yes" : "No"}
+        </span>
+      </span>
       <span className="col-span-2 flex justify-center">
         <Link
           href={`/setup/channels/${channel.id}`}
