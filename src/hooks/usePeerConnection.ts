@@ -123,11 +123,16 @@ export function usePeerConnection({
 
     try {
       const constraints = { audio: true, video: true };
-      const stream = modernGetUserMedia
-        ? await modernGetUserMedia(constraints)
-        : await new Promise<MediaStream>((resolve, reject) => {
-            legacyGetUserMedia.call(navigator, constraints, resolve, reject);
-          });
+      let stream: MediaStream;
+      if (modernGetUserMedia) {
+        stream = await modernGetUserMedia(constraints);
+      } else if (legacyGetUserMedia) {
+        stream = await new Promise<MediaStream>((resolve, reject) => {
+          legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+        });
+      } else {
+        throw new Error("Media capture not supported on this device.");
+      }
       localStreamRef.current = stream;
       setState((prev) => ({ ...prev, localStream: stream }));
       return stream;
