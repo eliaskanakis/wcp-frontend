@@ -184,6 +184,7 @@ export default function ChannelChatPage({
     wsRef.current = ws;
     ws.onopen = async () => {
       setStatus("connected");
+      console.log(senderName+" connected to chat server");
       let token: string | null = null;
       if (auth.currentUser) {
         try {
@@ -317,6 +318,7 @@ export default function ChannelChatPage({
       }
     };
     return () => {
+      console.log(senderName+" disconnected due to dismount");
       ws.close();
     };
   }, [

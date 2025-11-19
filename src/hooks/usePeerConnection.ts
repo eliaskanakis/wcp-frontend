@@ -20,10 +20,11 @@ type Options = {
   onError?: (message: string) => void;
 };
 
-export type CallSession = {
-  targetUserId: string;
-  targetName: string;
-};
+type LegacyGetUserMedia = (
+  constraints: MediaStreamConstraints,
+  successCallback: (stream: MediaStream) => void,
+  errorCallback: (error: DOMException) => void
+) => void;
 
 export type PeerConnectionState = {
   localStream: MediaStream | null;
@@ -55,15 +56,22 @@ export function usePeerConnection({
       if (targetUserId) {
         targetUserIdRef.current = targetUserId;
       }
-    if (peerRef.current) return peerRef.current;
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-      ],
-    });
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
+      if (peerRef.current) return peerRef.current;
+
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+        ],
+      });
+
+      pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        if (!targetUserIdRef.current){
+          console.warn("No target user ID for ICE candidate, skipping sendSignal");
+        }else{
+           console.log("Sending ICE candidate to", targetUserIdRef.current);
+        }
         sendSignal({
           type: "webrtc-ice",
           channelId,
@@ -73,13 +81,14 @@ export function usePeerConnection({
           targetUserId: targetUserIdRef.current ?? undefined,
           ice: event.candidate.toJSON(),
         });
-      }
-    };
-    pc.ontrack = (event) => {
-      const [stream] = event.streams;
-      remoteStreamRef.current = stream;
-      setState((prev) => ({ ...prev, remoteStream: stream }));
-    };
+      };
+
+      pc.ontrack = (event) => {
+        const [stream] = event.streams;
+        remoteStreamRef.current = stream;
+        setState((prev) => ({ ...prev, remoteStream: stream }));
+      };
+
       peerRef.current = pc;
       return pc;
     },
@@ -88,11 +97,37 @@ export function usePeerConnection({
 
   const obtainLocalStream = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
+
+    const modernGetUserMedia = navigator.mediaDevices?.getUserMedia?.bind(
+      navigator.mediaDevices
+    );
+    const legacyGetUserMedia: LegacyGetUserMedia | undefined =
+      (navigator as unknown as {
+        webkitGetUserMedia?: LegacyGetUserMedia;
+        mozGetUserMedia?: LegacyGetUserMedia;
+        msGetUserMedia?: LegacyGetUserMedia;
+      }).webkitGetUserMedia ||
+      (navigator as unknown as {
+        mozGetUserMedia?: LegacyGetUserMedia;
+        msGetUserMedia?: LegacyGetUserMedia;
+      }).mozGetUserMedia ||
+      (navigator as unknown as {
+        msGetUserMedia?: LegacyGetUserMedia;
+      }).msGetUserMedia;
+
+    if (!modernGetUserMedia && !legacyGetUserMedia) {
+      const error = new Error("Media capture not supported on this device.");
+      onError?.(error.message);
+      throw error;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: true,
-      });
+      const constraints = { audio: true, video: true };
+      const stream = modernGetUserMedia
+        ? await modernGetUserMedia(constraints)
+        : await new Promise<MediaStream>((resolve, reject) => {
+            legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+          });
       localStreamRef.current = stream;
       setState((prev) => ({ ...prev, localStream: stream }));
       return stream;
