@@ -1,0 +1,196 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+type SendSignal = (payload: {
+  type: string;
+  channelId: string;
+  from: string;
+  firebaseUserIdToken: string | null;
+  text?: string | null;
+  targetUserId?: string;
+  sdp?: RTCSessionDescriptionInit;
+  ice?: RTCIceCandidateInit;
+}) => void;
+
+type Options = {
+  channelId: string;
+  currentName: string;
+  sendSignal: SendSignal;
+  onError?: (message: string) => void;
+};
+
+export type CallSession = {
+  targetUserId: string;
+  targetName: string;
+};
+
+export type PeerConnectionState = {
+  localStream: MediaStream | null;
+  remoteStream: MediaStream | null;
+  isSelfMuted: boolean;
+  isRemoteMuted: boolean;
+};
+
+export function usePeerConnection({
+  channelId,
+  currentName,
+  sendSignal,
+  onError,
+}: Options) {
+  const peerRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const targetUserIdRef = useRef<string | null>(null);
+
+  const [state, setState] = useState<PeerConnectionState>({
+    localStream: null,
+    remoteStream: null,
+    isSelfMuted: false,
+    isRemoteMuted: false,
+  });
+
+  const ensurePeerConnection = useCallback(
+    async (targetUserId?: string) => {
+      if (targetUserId) {
+        targetUserIdRef.current = targetUserId;
+      }
+    if (peerRef.current) return peerRef.current;
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+      ],
+    });
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignal({
+          type: "webrtc-ice",
+          channelId,
+          from: currentName,
+          firebaseUserIdToken: null,
+          text: null,
+          targetUserId: targetUserIdRef.current ?? undefined,
+          ice: event.candidate.toJSON(),
+        });
+      }
+    };
+    pc.ontrack = (event) => {
+      const [stream] = event.streams;
+      remoteStreamRef.current = stream;
+      setState((prev) => ({ ...prev, remoteStream: stream }));
+    };
+      peerRef.current = pc;
+      return pc;
+    },
+    [channelId, currentName, sendSignal]
+  );
+
+  const obtainLocalStream = useCallback(async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: true,
+      });
+      localStreamRef.current = stream;
+      setState((prev) => ({ ...prev, localStream: stream }));
+      return stream;
+    } catch (error) {
+      onError?.("Unable to access camera or microphone.");
+      throw error;
+    }
+  }, [onError]);
+
+  const addLocalTracks = useCallback(
+    async (pc: RTCPeerConnection) => {
+      const stream = await obtainLocalStream();
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    },
+    [obtainLocalStream]
+  );
+
+  const createOffer = useCallback(
+    async (targetUserId: string) => {
+      const pc = await ensurePeerConnection(targetUserId);
+      await addLocalTracks(pc);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      return offer;
+    },
+    [addLocalTracks, ensurePeerConnection]
+  );
+
+  const acceptOffer = useCallback(
+    async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
+      const pc = await ensurePeerConnection(targetUserId);
+      await addLocalTracks(pc);
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      return answer;
+    },
+    [addLocalTracks, ensurePeerConnection]
+  );
+
+  const handleAnswer = useCallback(async (answer: RTCSessionDescriptionInit) => {
+    if (!peerRef.current) return;
+    await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+  }, []);
+
+  const handleRemoteIce = useCallback(async (candidate: RTCIceCandidateInit) => {
+    if (!peerRef.current || !candidate) return;
+    try {
+      await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (error) {
+      console.error("Failed to add remote ICE candidate", error);
+    }
+  }, []);
+
+  const endCall = useCallback(() => {
+    peerRef.current?.getSenders().forEach((sender) => sender.track?.stop());
+    peerRef.current?.close();
+    peerRef.current = null;
+    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localStreamRef.current = null;
+    remoteStreamRef.current = null;
+    targetUserIdRef.current = null;
+    setState({
+      localStream: null,
+      remoteStream: null,
+      isSelfMuted: false,
+      isRemoteMuted: false,
+    });
+  }, []);
+
+  const toggleMuteSelf = useCallback(() => {
+    if (!localStreamRef.current) return;
+    const next = !state.isSelfMuted;
+    localStreamRef.current.getAudioTracks().forEach((track) => {
+      track.enabled = !next;
+    });
+    setState((prev) => ({ ...prev, isSelfMuted: next }));
+  }, [state.isSelfMuted]);
+
+  const toggleMuteRemote = useCallback(() => {
+    const next = !state.isRemoteMuted;
+    setState((prev) => ({ ...prev, isRemoteMuted: next }));
+  }, [state.isRemoteMuted]);
+
+  useEffect(() => {
+    return () => {
+      endCall();
+    };
+  }, [endCall]);
+
+  return {
+    createOffer,
+    acceptOffer,
+    handleAnswer,
+    handleRemoteIce,
+    endCall,
+    state,
+    toggleMuteSelf,
+    toggleMuteRemote,
+  };
+}

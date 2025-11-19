@@ -7,10 +7,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useChannels } from "@/context/ChannelsContext";
 import { auth, db } from "@/lib/firebase";
 import { canViewChannel, isChannelAdmin } from "@/utils/channelAccess";
-
-type ChatPageProps = {
-  params: Promise<{ channelId: string }>;
-};
+import { usePeerConnection } from "@/hooks/usePeerConnection";
+import { CallPanel } from "@/components/CallPanel";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000";
 
@@ -24,16 +22,58 @@ type RosterUser = {
   username: string;
 };
 
+type OutboundMessageType =
+  | "join"
+  | "chat"
+  | "fetch-history"
+  | "webrtc-offer"
+  | "webrtc-answer"
+  | "webrtc-ice"
+  | "call-cancelled"
+  | "call-rejected"
+  | "call-ended";
+
 type OutboundMessage = {
-  type: "join" | "chat" | "fetch-history";
+  type: OutboundMessageType;
   channelId: string;
-  firebaseUserIdToken: string | null;
   from: string;
+  firebaseUserIdToken: string | null;
   text: string | null;
   beforeTs?: number;
+  targetUserId?: string;
+  sdp?: RTCSessionDescriptionInit;
+  ice?: RTCIceCandidateInit;
+  reason?: string;
 };
 
-export default function ChannelChatPage({ params }: ChatPageProps) {
+type IncomingCall = {
+  fromUserId: string;
+  fromName: string;
+  sdp: RTCSessionDescriptionInit;
+};
+
+type ActiveCall = {
+  userId: string;
+  username: string;
+};
+
+export default function ChannelChatPage({
+  params,
+}: {
+  params: Promise<{ channelId: string }>;
+}) {
+  const resolved = use(params);
+  const channelId = resolved.channelId;
+
+  const { channels, loading, refresh } = useChannels();
+  const { profile } = useAuth();
+
+  const senderName = profile?.name?.trim() || "Anonymous";
+  const currentUserId = profile?.uid ?? null;
+  const channel = channels.find((item) => item.id === channelId);
+  const canView = channel ? canViewChannel(channel, profile ?? null) : false;
+  const isAdmin = channel ? isChannelAdmin(channel, profile ?? null) : false;
+
   const [status, setStatus] = useState<
     "connecting" | "connected" | "disconnected" | "error"
   >("connecting");
@@ -41,30 +81,102 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
   const [input, setInput] = useState("");
   const [rosterOpen, setRosterOpen] = useState(true);
   const [roster, setRoster] = useState<RosterUser[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
+  const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  const [outgoingCall, setOutgoingCall] = useState<ActiveCall | null>(null);
+
   const wsRef = useRef<WebSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
   const oldestMessageTsRef = useRef<number | null>(null);
-  const stickToBottomRef = useRef(true);
   const pendingHistoryRef = useRef<{ pending: boolean; prevHeight: number }>({
     pending: false,
     prevHeight: 0,
   });
+  const stickToBottomRef = useRef(true);
+  const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const outgoingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const resolved = use(params);
-  const channelId = resolved.channelId;
-  const { channels, loading, refresh } = useChannels();
-  const { profile } = useAuth();
-  const senderName = profile?.name?.trim() || "Anonymous";
-  const channel = channels.find((item) => item.id === channelId);
-  const canView = channel ? canViewChannel(channel, profile ?? null) : false;
-  const isAdmin = channel ? isChannelAdmin(channel, profile ?? null) : false;
+  const pushSystemMessage = useCallback((text: string, isError = false) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        type: isError ? "systemError" : "system",
+        text,
+        ts: Date.now(),
+      },
+    ]);
+  }, []);
 
   const sendSocketPayload = useCallback((payload: OutboundMessage) => {
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify(payload));
   }, []);
+
+  const signalSender = useCallback(
+    (payload: {
+      type: string;
+      channelId: string;
+      from: string;
+      firebaseUserIdToken: string | null;
+      text?: string | null;
+      targetUserId?: string;
+      sdp?: RTCSessionDescriptionInit;
+      ice?: RTCIceCandidateInit;
+    }) => {
+      sendSocketPayload({
+        type: payload.type as OutboundMessageType,
+        channelId: payload.channelId,
+        from: payload.from,
+        firebaseUserIdToken: payload.firebaseUserIdToken,
+        text: payload.text ?? null,
+        targetUserId: payload.targetUserId,
+        sdp: payload.sdp,
+        ice: payload.ice,
+      });
+    },
+    [sendSocketPayload]
+  );
+
+  const {
+    createOffer,
+    acceptOffer,
+    handleAnswer,
+    handleRemoteIce,
+    endCall: endPeerConnection,
+    state: peerState,
+    toggleMuteRemote,
+    toggleMuteSelf,
+  } = usePeerConnection({
+    channelId,
+    currentName: senderName,
+    sendSignal: signalSender,
+    onError: (message) => pushSystemMessage(message, true),
+  });
+
+  const clearIncomingTimer = () => {
+    if (incomingTimerRef.current) {
+      clearTimeout(incomingTimerRef.current);
+      incomingTimerRef.current = null;
+    }
+  };
+
+  const clearOutgoingTimer = () => {
+    if (outgoingTimerRef.current) {
+      clearTimeout(outgoingTimerRef.current);
+      outgoingTimerRef.current = null;
+    }
+  };
+
+  const resetCallState = useCallback(() => {
+    clearIncomingTimer();
+    clearOutgoingTimer();
+    setIncomingCall(null);
+    setOutgoingCall(null);
+    setActiveCall(null);
+    endPeerConnection();
+  }, [endPeerConnection]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !canView) return;
@@ -90,24 +202,14 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
     };
     ws.onclose = () => setStatus("disconnected");
     ws.onerror = () => setStatus("disconnected");
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "system") {
-          setMessages((prev) => [
-            ...prev,
-            { type: "system", text: msg.text, ts: msg.ts ?? Date.now() },
-          ]);
+          pushSystemMessage(msg.text);
         } else if (msg.type === "error") {
           setStatus("error");
-          setMessages((prev) => [
-            ...prev,
-            {
-              type: "systemError",
-              text: `Error: ${msg.text ?? "Unknown error"}`,
-              ts: msg.ts ?? Date.now(),
-            },
-          ]);
+          pushSystemMessage(msg.text ?? "Unknown error", true);
         } else if (msg.type === "chat") {
           setMessages((prev) => [
             ...prev,
@@ -135,12 +237,12 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
                       ts: item.ts,
                     })
                   )
-                  .sort((a, b) => a.ts - b.ts)
+                  .sort((a, b) => b.ts - a.ts)
               : [];
           setMessages((prev) => [...nextMessages, ...prev]);
           if (nextMessages.length > 0) {
             oldestMessageTsRef.current =
-              nextMessages[0].ts;
+              nextMessages[nextMessages.length - 1].ts;
           }
           setHistoryLoaded(true);
         } else if (msg.type === "channel-users") {
@@ -154,18 +256,61 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
           );
         } else if (msg.type === "user-joined") {
           setRoster((prev) => {
-            if (prev.some((user) => user.userId === msg.userId)) {
-              return prev;
-            }
-            return [
-              ...prev,
-              { userId: msg.userId, username: msg.username },
-            ];
+            if (prev.some((user) => user.userId === msg.userId)) return prev;
+            return [...prev, { userId: msg.userId, username: msg.username }];
           });
         } else if (msg.type === "user-left") {
           setRoster((prev) =>
             prev.filter((user) => user.userId !== msg.userId)
           );
+        } else if (msg.type === "webrtc-ice" && msg.ice) {
+          await handleRemoteIce(msg.ice);
+        } else if (msg.type === "webrtc-answer" && msg.sdp) {
+          await handleAnswer(msg.sdp);
+          clearOutgoingTimer();
+          setActiveCall(
+            (prev) => prev ?? { userId: msg.userId, username: msg.from }
+          );
+          setOutgoingCall(null);
+          pushSystemMessage(`Connected with ${msg.from}.`);
+        } else if (msg.type === "webrtc-offer" && msg.sdp) {
+          if (msg.targetUserId && msg.targetUserId !== currentUserId) {
+            return;
+          }
+          const callerId = msg.userId;
+          const callerName = msg.from;
+          setIncomingCall({
+            fromUserId: callerId,
+            fromName: callerName,
+            sdp: msg.sdp,
+          });
+          pushSystemMessage(`${callerName} is calling you...`);
+          clearIncomingTimer();
+          incomingTimerRef.current = setTimeout(() => {
+            sendSocketPayload({
+              type: "call-rejected",
+              channelId,
+              from: senderName,
+              firebaseUserIdToken: null,
+              text: null,
+              targetUserId: callerId,
+              reason: "timeout",
+            });
+            pushSystemMessage(`Missed call from ${callerName}.`, true);
+            setIncomingCall((current) =>
+              current && current.fromUserId === callerId ? null : current
+            );
+            endPeerConnection();
+          }, 15000);
+        } else if (msg.type === "call-cancelled") {
+          pushSystemMessage(`${msg.from} cancelled the call.`);
+          resetCallState();
+        } else if (msg.type === "call-rejected") {
+          pushSystemMessage(`${msg.from} rejected the call.`);
+          resetCallState();
+        } else if (msg.type === "call-ended") {
+          pushSystemMessage(`${msg.from} ended the call.`);
+          resetCallState();
         }
       } catch (error) {
         console.error("Invalid websocket payload", error);
@@ -174,7 +319,19 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
     return () => {
       ws.close();
     };
-  }, [canView, channelId, senderName, sendSocketPayload]);
+  }, [
+    canView,
+    channelId,
+    currentUserId,
+    endPeerConnection,
+    handleAnswer,
+    handleRemoteIce,
+    incomingCall,
+    pushSystemMessage,
+    resetCallState,
+    sendSocketPayload,
+    senderName,
+  ]);
 
   useEffect(() => {
     const container = messagesRef.current;
@@ -228,9 +385,8 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
   }, [handleHistoryRequest]);
 
   const handleRemoveUser = useCallback(
-    async (userId: string) => {
-      if (!channel || !profile) return;
-      if (!isAdmin) return;
+    async (userId: string, name: string) => {
+      if (!channel || !isAdmin) return;
       try {
         const updatedMembers =
           channel.members?.map((member) =>
@@ -245,56 +401,191 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
           ),
         });
         await refresh();
-        setMessages((prev) => [
-          ...prev,
-          {
-            type: "system",
-            text: `Blocked user ${userId}`,
-            ts: Date.now(),
-          },
-        ]);
+        pushSystemMessage(`${name} was blocked.`);
       } catch (error) {
         console.error("Failed to block user", error);
-        setMessages((prev) => [
-          ...prev,
-          {
-            type: "systemError",
-            text: "Unable to block this user. Try again later.",
-            ts: Date.now(),
-          },
-        ]);
+        pushSystemMessage("Unable to block user.", true);
       }
     },
-    [channel, channels, isAdmin, profile, refresh]
+    [channel, channels, isAdmin, pushSystemMessage, refresh]
   );
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
-    if (!text || !canView) return;
-    let token: string | null = null;
-    if (auth.currentUser) {
-      try {
-        token = await auth.currentUser.getIdToken();
-      } catch (error) {
-        console.error("Failed to fetch user token", error);
+  const initiateCall = useCallback(
+    async (targetUserId: string, targetName: string) => {
+      if (activeCall || outgoingCall) {
+        pushSystemMessage("You already have a pending or active call.", true);
+        return;
       }
-    }
-    sendSocketPayload({
-      type: "chat",
+      try {
+        const offer = await createOffer(targetUserId);
+        let token: string | null = null;
+        if (auth.currentUser) {
+          token = await auth.currentUser.getIdToken();
+        }
+        setOutgoingCall({ userId: targetUserId, username: targetName });
+        sendSocketPayload({
+          type: "webrtc-offer",
+          channelId,
+          from: senderName,
+          firebaseUserIdToken: token,
+          text: null,
+          targetUserId,
+          sdp: offer,
+        });
+        pushSystemMessage(`Calling ${targetName}...`);
+        clearOutgoingTimer();
+        outgoingTimerRef.current = setTimeout(() => {
+          sendSocketPayload({
+            type: "call-cancelled",
+            channelId,
+            from: senderName,
+            firebaseUserIdToken: null,
+            text: null,
+            targetUserId,
+            reason: "timeout",
+          });
+          pushSystemMessage(`${targetName} did not answer.`, true);
+          setOutgoingCall((current) =>
+            current && current.userId === targetUserId ? null : current
+          );
+          endPeerConnection();
+        }, 15000);
+      } catch (error) {
+        console.error("Call initiation failed", error);
+        pushSystemMessage("Unable to start the call.", true);
+      }
+    },
+    [
+      activeCall,
       channelId,
-      firebaseUserIdToken: token,
-      from: senderName,
-      text,
-    });
-    setInput("");
-  }, [canView, channelId, input, sendSocketPayload, senderName]);
+      createOffer,
+      endPeerConnection,
+      outgoingCall,
+      pushSystemMessage,
+      sendSocketPayload,
+      senderName,
+    ]
+  );
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void sendMessage();
+  const cancelOutgoingCall = useCallback(() => {
+    if (!outgoingCall) return;
+    sendSocketPayload({
+      type: "call-cancelled",
+      channelId,
+      from: senderName,
+      firebaseUserIdToken: null,
+      text: null,
+      targetUserId: outgoingCall.userId,
+      reason: "cancelled",
+    });
+    pushSystemMessage(`Cancelled call to ${outgoingCall.username}.`);
+    clearOutgoingTimer();
+    setOutgoingCall(null);
+    endPeerConnection();
+  }, [
+    channelId,
+    endPeerConnection,
+    outgoingCall,
+    pushSystemMessage,
+    sendSocketPayload,
+    senderName,
+  ]);
+
+  const acceptIncomingCall = useCallback(async () => {
+    if (!incomingCall) return;
+    clearIncomingTimer();
+    try {
+      const answer = await acceptOffer(
+        incomingCall.sdp,
+        incomingCall.fromUserId
+      );
+      let token: string | null = null;
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      sendSocketPayload({
+        type: "webrtc-answer",
+        channelId,
+        from: senderName,
+        firebaseUserIdToken: token,
+        text: null,
+        targetUserId: incomingCall.fromUserId,
+        sdp: answer,
+      });
+      setActiveCall({
+        userId: incomingCall.fromUserId,
+        username: incomingCall.fromName,
+      });
+      setIncomingCall(null);
+      pushSystemMessage(`Connected with ${incomingCall.fromName}.`);
+    } catch (error) {
+      console.error("Call answer failed", error);
+      pushSystemMessage("Unable to answer call.", true);
+      setIncomingCall(null);
     }
-  };
+  }, [
+    acceptOffer,
+    channelId,
+    incomingCall,
+    pushSystemMessage,
+    sendSocketPayload,
+    senderName,
+  ]);
+
+  const rejectIncomingCall = useCallback(
+    (reason = "rejected") => {
+      if (!incomingCall) return;
+      sendSocketPayload({
+        type: "call-rejected",
+        channelId,
+        from: senderName,
+        firebaseUserIdToken: null,
+        text: null,
+        targetUserId: incomingCall.fromUserId,
+        reason,
+      });
+      pushSystemMessage(`Declined call from ${incomingCall.fromName}.`);
+      clearIncomingTimer();
+      setIncomingCall(null);
+      endPeerConnection();
+    },
+    [
+      channelId,
+      endPeerConnection,
+      incomingCall,
+      pushSystemMessage,
+      sendSocketPayload,
+      senderName,
+    ]
+  );
+
+  const endActiveCall = useCallback(() => {
+    if (!activeCall) return;
+    sendSocketPayload({
+      type: "call-ended",
+      channelId,
+      from: senderName,
+      firebaseUserIdToken: null,
+      text: null,
+      targetUserId: activeCall.userId,
+    });
+    pushSystemMessage(`Ended call with ${activeCall.username}.`);
+    resetCallState();
+  }, [
+    activeCall,
+    channelId,
+    pushSystemMessage,
+    resetCallState,
+    sendSocketPayload,
+    senderName,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      clearIncomingTimer();
+      clearOutgoingTimer();
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -424,12 +715,33 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
               placeholder="Type a message and hit Enter"
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              onKeyDown={handleKeyDown}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (!input.trim() || !canView) return;
+                  sendSocketPayload({
+                    type: "chat",
+                    channelId,
+                    from: senderName,
+                    firebaseUserIdToken: null,
+                    text: input.trim(),
+                  });
+                  setInput("");
+                }
+              }}
             />
             <button
               className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
               onClick={() => {
-                void sendMessage();
+                if (!input.trim() || !canView) return;
+                sendSocketPayload({
+                  type: "chat",
+                  channelId,
+                  from: senderName,
+                  firebaseUserIdToken: null,
+                  text: input.trim(),
+                });
+                setInput("");
               }}
               disabled={status !== "connected"}
             >
@@ -452,28 +764,69 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
           </div>
           <ul className="mt-4 space-y-3 text-sm">
             {roster.length > 0 ? (
-              roster.map((user) => (
-                <li
-                  key={user.userId}
-                  className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 shadow-sm"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-semibold text-slate-900">
-                      {user.username}
-                    </p>
-                    {isAdmin && (
-                      <button
-                        onClick={() => {
-                          void handleRemoveUser(user.userId);
-                        }}
-                        className="rounded-full border border-rose-100 px-3 py-1 text-xs font-semibold text-rose-500 transition hover:border-rose-200 hover:text-rose-600"
-                      >
-                        Block
-                      </button>
-                    )}
-                  </div>
-                </li>
-              ))
+              roster.map((user) => {
+                const isSelf = profile?.uid === user.userId;
+                return (
+                  <li
+                    key={user.userId}
+                    className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-semibold text-slate-900">
+                        {user.username}
+                      </p>
+                      <div className="flex gap-2">
+                        {!isSelf && (
+                          <button
+                            onClick={() => {
+                              void initiateCall(user.userId, user.username);
+                            }}
+                            className="rounded-full border border-slate-200 p-2 text-slate-500 transition hover:border-slate-300 hover:text-slate-900"
+                            title={`Start video call with ${user.username}`}
+                            aria-label={`Start video call with ${user.username}`}
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className="h-4 w-4"
+                            >
+                              <path d="M15 10.5V8.75a2.25 2.25 0 0 0-2.25-2.25h-6A2.25 2.25 0 0 0 4.5 8.75v6.5A2.25 2.25 0 0 0 6.75 17.5h6A2.25 2.25 0 0 0 15 15.25V13.5l4.5 2.25v-7.5L15 10.5Z" />
+                            </svg>
+                          </button>
+                        )}
+                        {isAdmin && (
+                          <button
+                            onClick={() => {
+                              void handleRemoveUser(user.userId, user.username);
+                            }}
+                            className="rounded-full border border-rose-100 p-2 text-rose-400 transition hover:border-rose-200 hover:text-rose-600"
+                            title={`Block ${user.username}`}
+                            aria-label={`Block ${user.username}`}
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className="h-4 w-4"
+                            >
+                              <path d="m18 6-12 12M6 6l12 12" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })
             ) : (
               <li className="rounded-xl border border-dashed border-slate-200 bg-white/60 px-3 py-2 text-center text-xs text-slate-400">
                 No active users
@@ -482,6 +835,65 @@ export default function ChannelChatPage({ params }: ChatPageProps) {
           </ul>
         </aside>
       </section>
+
+      {incomingCall && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+              Incoming call
+            </p>
+            <h3 className="mt-2 text-2xl font-bold text-slate-900">
+              {incomingCall.fromName}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              Accept the call within 15 seconds or it will auto-decline.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              <button
+                onClick={() => {
+                  void acceptIncomingCall();
+                }}
+                className="rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
+              >
+                Answer
+              </button>
+              <button
+                onClick={() => {
+                  rejectIncomingCall("rejected");
+                }}
+                className="rounded-full border border-slate-200 px-5 py-2 text-sm font-semibold text-slate-600 transition hover:border-slate-300"
+              >
+                Decline
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {outgoingCall && (
+        <div className="fixed bottom-6 left-1/2 z-30 flex -translate-x-1/2 items-center gap-4 rounded-full border border-slate-200 bg-white px-6 py-3 text-sm shadow-lg">
+          <span>Calling {outgoingCall.username}...</span>
+          <button
+            onClick={cancelOutgoingCall}
+            className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {activeCall && (
+        <CallPanel
+          title={`In call with ${activeCall.username}`}
+          localStream={peerState.localStream}
+          remoteStream={peerState.remoteStream}
+          isSelfMuted={peerState.isSelfMuted}
+          isRemoteMuted={peerState.isRemoteMuted}
+          onToggleSelfMute={toggleMuteSelf}
+          onToggleRemoteMute={toggleMuteRemote}
+          onEndCall={endActiveCall}
+        />
+      )}
     </div>
   );
 }
