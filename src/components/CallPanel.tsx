@@ -26,18 +26,24 @@ export function CallPanel({
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
-    }
-  }, [localStream]);
+useEffect(() => {
+  if (localVideoRef.current && localStream) {
+    localVideoRef.current.srcObject = localStream;
+    localVideoRef.current.play().catch(() => {
+      /* ignored */
+    });
+  }
+}, [localStream]);
 
-  useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.muted = isRemoteMuted;
-    }
-  }, [remoteStream, isRemoteMuted]);
+useEffect(() => {
+  if (remoteVideoRef.current && remoteStream) {
+    remoteVideoRef.current.srcObject = remoteStream;
+    remoteVideoRef.current.muted = isRemoteMuted;
+    remoteVideoRef.current.play().catch(() => {
+      /* ignored */
+    });
+  }
+}, [remoteStream, isRemoteMuted]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
