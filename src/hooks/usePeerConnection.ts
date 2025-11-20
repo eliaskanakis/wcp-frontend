@@ -36,6 +36,8 @@ export type PeerConnectionState = {
   iceState: RTCIceConnectionState;
 };
 
+type MediaTransceiverMap = Partial<Record<"audio" | "video", RTCRtpTransceiver>>;
+
 export function usePeerConnection({
   channelId,
   currentName,
@@ -47,6 +49,7 @@ export function usePeerConnection({
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const targetUserIdRef = useRef<string | null>(null);
+  const transceiversRef = useRef<MediaTransceiverMap>({});
 
   const [state, setState] = useState<PeerConnectionState>({
     localStream: null,
@@ -71,13 +74,18 @@ export function usePeerConnection({
         ],
       });
 
+      const configured: MediaTransceiverMap = {};
       (["audio", "video"] as const).forEach((kind) => {
+        if (typeof pc.addTransceiver !== "function") {
+          return;
+        }
         try {
-          pc.addTransceiver(kind, { direction: "sendrecv" });
+          configured[kind] = pc.addTransceiver(kind, { direction: "sendrecv" });
         } catch {
-          /* Ignore addTransceiver issues on older browsers */
+          /* Ignore browsers that cannot preconfigure this transceiver */
         }
       });
+      transceiversRef.current = configured;
 
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
@@ -192,6 +200,51 @@ export function usePeerConnection({
   const addLocalTracks = useCallback(
     async (pc: RTCPeerConnection) => {
       const stream = await obtainLocalStream();
+      const transceivers = transceiversRef.current;
+      const hasConfiguredTransceivers = Boolean(
+        transceivers.audio || transceivers.video
+      );
+
+      if (hasConfiguredTransceivers) {
+        const replacements: Promise<void>[] = [];
+        const fallbackTracks: MediaStreamTrack[] = [];
+
+        stream.getTracks().forEach((track) => {
+          const kind =
+            track.kind === "audio"
+              ? "audio"
+              : track.kind === "video"
+                ? "video"
+                : null;
+          if (kind) {
+            const transceiver = transceivers[kind];
+            if (transceiver?.sender) {
+              transceiver.direction = "sendrecv";
+              replacements.push(transceiver.sender.replaceTrack(track));
+              return;
+            }
+          }
+          fallbackTracks.push(track);
+        });
+
+        if (replacements.length > 0) {
+          await Promise.all(replacements);
+        }
+
+        if (fallbackTracks.length > 0) {
+          const senders = pc.getSenders();
+          fallbackTracks.forEach((track) => {
+            const hasSender = senders.some(
+              (sender) => sender.track && sender.track.kind === track.kind
+            );
+            if (!hasSender) {
+              pc.addTrack(track, stream);
+            }
+          });
+        }
+        return;
+      }
+
       const senders = pc.getSenders();
       stream.getTracks().forEach((track) => {
         const alreadySending = senders.some(
@@ -255,6 +308,7 @@ export function usePeerConnection({
     localStreamRef.current = null;
     remoteStreamRef.current = null;
     targetUserIdRef.current = null;
+    transceiversRef.current = {};
     setState({
       localStream: null,
       remoteStream: null,
