@@ -32,6 +32,8 @@ export type PeerConnectionState = {
   remoteStream: MediaStream | null;
   isSelfMuted: boolean;
   isRemoteMuted: boolean;
+  connectionState: RTCPeerConnectionState;
+  iceState: RTCIceConnectionState;
 };
 
 export function usePeerConnection({
@@ -51,6 +53,8 @@ export function usePeerConnection({
     remoteStream: null,
     isSelfMuted: false,
     isRemoteMuted: true,
+    connectionState: "new",
+    iceState: "new",
   });
 
   const ensurePeerConnection = useCallback(
@@ -66,9 +70,6 @@ export function usePeerConnection({
           { urls: "stun:stun1.l.google.com:19302" },
         ],
       });
-
-      pc.addTransceiver("audio", { direction: "sendrecv" });
-      pc.addTransceiver("video", { direction: "sendrecv" });
 
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
@@ -119,10 +120,12 @@ export function usePeerConnection({
 
       pc.onconnectionstatechange = () => {
         onPeerEvent?.("connection-state", pc.connectionState);
+        setState((prev) => ({ ...prev, connectionState: pc.connectionState }));
       };
 
       pc.oniceconnectionstatechange = () => {
         onPeerEvent?.("ice-state", pc.iceConnectionState);
+        setState((prev) => ({ ...prev, iceState: pc.iceConnectionState }));
       };
 
       peerRef.current = pc;
@@ -181,7 +184,15 @@ export function usePeerConnection({
   const addLocalTracks = useCallback(
     async (pc: RTCPeerConnection) => {
       const stream = await obtainLocalStream();
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      const senders = pc.getSenders();
+      stream.getTracks().forEach((track) => {
+        const alreadySending = senders.some(
+          (sender) => sender.track && sender.track.kind === track.kind
+        );
+        if (!alreadySending) {
+          pc.addTrack(track, stream);
+        }
+      });
     },
     [obtainLocalStream]
   );
@@ -200,8 +211,13 @@ export function usePeerConnection({
   const acceptOffer = useCallback(
     async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
       const pc = await ensurePeerConnection(targetUserId);
-      await addLocalTracks(pc);
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      await addLocalTracks(pc);
+      pc.getTransceivers().forEach((transceiver) => {
+        if (transceiver.receiver.track.kind === "video") {
+          transceiver.direction = "sendrecv";
+        }
+      });
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       return answer;
