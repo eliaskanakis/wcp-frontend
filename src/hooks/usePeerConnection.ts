@@ -84,9 +84,18 @@ export function usePeerConnection({
       };
 
       pc.ontrack = (event) => {
-        const [stream] = event.streams;
-        remoteStreamRef.current = stream;
-        setState((prev) => ({ ...prev, remoteStream: stream }));
+        if (event.streams && event.streams[0]) {
+          remoteStreamRef.current = event.streams[0];
+        } else {
+          const existing =
+            remoteStreamRef.current ?? new MediaStream();
+          existing.addTrack(event.track);
+          remoteStreamRef.current = existing;
+        }
+        setState((prev) => ({
+          ...prev,
+          remoteStream: remoteStreamRef.current,
+        }));
       };
 
       peerRef.current = pc;
