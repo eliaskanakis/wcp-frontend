@@ -333,7 +333,6 @@ export default function ChannelChatPage({
     endPeerConnection,
     handleAnswer,
     handleRemoteIce,
-    incomingCall,
     pushSystemMessage,
     resetCallState,
     sendSocketPayload,
