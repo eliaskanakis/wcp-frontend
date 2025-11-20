@@ -67,11 +67,6 @@ export function usePeerConnection({
 
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
-        if (!targetUserIdRef.current){
-          console.warn("No target user ID for ICE candidate, skipping sendSignal");
-        }else{
-           console.log("Sending ICE candidate to", targetUserIdRef.current);
-        }
         sendSignal({
           type: "webrtc-ice",
           channelId,
@@ -84,18 +79,35 @@ export function usePeerConnection({
       };
 
       pc.ontrack = (event) => {
+        const assignStream = (stream: MediaStream) => {
+          remoteStreamRef.current = stream;
+          setState((prev) => ({ ...prev, remoteStream: stream }));
+        };
+
         if (event.streams && event.streams[0]) {
-          remoteStreamRef.current = event.streams[0];
+          const [stream] = event.streams;
+          if (event.track.muted) {
+            event.track.onunmute = () => {
+              event.track.onunmute = null;
+              assignStream(stream);
+            };
+          } else {
+            assignStream(stream);
+          }
         } else {
-          const existing =
+          const inboundStream =
             remoteStreamRef.current ?? new MediaStream();
-          existing.addTrack(event.track);
-          remoteStreamRef.current = existing;
+          inboundStream.addTrack(event.track);
+          remoteStreamRef.current = inboundStream;
+          if (event.track.muted) {
+            event.track.onunmute = () => {
+              event.track.onunmute = null;
+              assignStream(inboundStream);
+            };
+          } else {
+            assignStream(inboundStream);
+          }
         }
-        setState((prev) => ({
-          ...prev,
-          remoteStream: remoteStreamRef.current,
-        }));
       };
 
       peerRef.current = pc;
