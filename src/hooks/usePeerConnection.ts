@@ -251,7 +251,9 @@ export function usePeerConnection({
       localStream: null,
       remoteStream: null,
       isSelfMuted: false,
-      isRemoteMuted: false,
+      isRemoteMuted: true,
+      connectionState: "new",
+      iceState: "new",
     });
   }, []);
 
