@@ -211,8 +211,8 @@ export function usePeerConnection({
   const acceptOffer = useCallback(
     async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
       const pc = await ensurePeerConnection(targetUserId);
-      await addLocalTracks(pc);
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      await addLocalTracks(pc);
       pc.getTransceivers().forEach((transceiver) => {
         if (transceiver.receiver.track.kind === "video") {
           transceiver.direction = "sendrecv";
