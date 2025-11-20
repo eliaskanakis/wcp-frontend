@@ -18,6 +18,7 @@ type Options = {
   currentName: string;
   sendSignal: SendSignal;
   onError?: (message: string) => void;
+  onPeerEvent?: (event: string, detail?: string) => void;
 };
 
 type LegacyGetUserMedia = (
@@ -38,6 +39,7 @@ export function usePeerConnection({
   currentName,
   sendSignal,
   onError,
+  onPeerEvent,
 }: Options) {
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -65,8 +67,12 @@ export function usePeerConnection({
         ],
       });
 
+      pc.addTransceiver("audio", { direction: "sendrecv" });
+      pc.addTransceiver("video", { direction: "sendrecv" });
+
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
+        onPeerEvent?.("local-ice", JSON.stringify(event.candidate));
         sendSignal({
           type: "webrtc-ice",
           channelId,
@@ -82,6 +88,7 @@ export function usePeerConnection({
         const assignStream = (stream: MediaStream) => {
           remoteStreamRef.current = stream;
           setState((prev) => ({ ...prev, remoteStream: stream }));
+          onPeerEvent?.("remote-track", event.track.kind);
         };
 
         if (event.streams && event.streams[0]) {
@@ -110,10 +117,18 @@ export function usePeerConnection({
         }
       };
 
+      pc.onconnectionstatechange = () => {
+        onPeerEvent?.("connection-state", pc.connectionState);
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        onPeerEvent?.("ice-state", pc.iceConnectionState);
+      };
+
       peerRef.current = pc;
       return pc;
     },
-    [channelId, currentName, sendSignal]
+    [channelId, currentName, onPeerEvent, sendSignal]
   );
 
   const obtainLocalStream = useCallback(async () => {

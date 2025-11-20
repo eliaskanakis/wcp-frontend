@@ -153,6 +153,11 @@ export default function ChannelChatPage({
     currentName: senderName,
     sendSignal: signalSender,
     onError: (message) => pushSystemMessage(message, true),
+    onPeerEvent: (event, detail) => {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[RTC]", event, detail);
+      }
+    },
   });
 
   const clearIncomingTimer = () => {
