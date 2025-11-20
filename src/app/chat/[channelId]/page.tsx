@@ -282,6 +282,7 @@ export default function ChannelChatPage({
           if (msg.targetUserId && msg.targetUserId !== currentUserId) {
             return;
           }
+          resetCallState();
           const callerId = msg.userId;
           const callerName = msg.from;
           setIncomingCall({
@@ -422,6 +423,7 @@ export default function ChannelChatPage({
         pushSystemMessage("You already have a pending or active call.", true);
         return;
       }
+      endPeerConnection();
       try {
         const offer = await createOffer(targetUserId);
         let token: string | null = null;
@@ -459,6 +461,7 @@ export default function ChannelChatPage({
       } catch (error) {
         console.error("Call initiation failed", error);
         pushSystemMessage("Unable to start the call.", true);
+        endPeerConnection();
       }
     },
     [
@@ -500,6 +503,7 @@ export default function ChannelChatPage({
   const acceptIncomingCall = useCallback(async () => {
     if (!incomingCall) return;
     clearIncomingTimer();
+    endPeerConnection();
     try {
       const answer = await acceptOffer(
         incomingCall.sdp,
@@ -528,10 +532,12 @@ export default function ChannelChatPage({
       console.error("Call answer failed", error);
       pushSystemMessage("Unable to answer call.", true);
       setIncomingCall(null);
+      endPeerConnection();
     }
   }, [
     acceptOffer,
     channelId,
+    endPeerConnection,
     incomingCall,
     pushSystemMessage,
     sendSocketPayload,
