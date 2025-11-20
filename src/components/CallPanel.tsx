@@ -25,25 +25,46 @@ export function CallPanel({
 }: CallPanelProps) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previousLocalStream = useRef<MediaStream | null>(null);
+  const previousRemoteStream = useRef<MediaStream | null>(null);
 
-useEffect(() => {
-  if (localVideoRef.current && localStream) {
-    localVideoRef.current.srcObject = localStream;
-    localVideoRef.current.play().catch(() => {
-      /* ignored */
-    });
-  }
-}, [localStream]);
+  useEffect(() => {
+    const video = localVideoRef.current;
+    const stream = localStream ?? null;
+    if (!video) return;
 
-useEffect(() => {
-  if (remoteVideoRef.current && remoteStream) {
-    remoteVideoRef.current.srcObject = remoteStream;
-    remoteVideoRef.current.muted = isRemoteMuted;
-    remoteVideoRef.current.play().catch(() => {
-      /* ignored */
-    });
-  }
-}, [remoteStream, isRemoteMuted]);
+    if (previousLocalStream.current !== stream) {
+      video.srcObject = stream;
+      previousLocalStream.current = stream;
+      if (stream) {
+        video.play().catch(() => {
+          /* autoplay suppressed */
+        });
+      } else {
+        video.pause();
+      }
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    const video = remoteVideoRef.current;
+    const stream = remoteStream ?? null;
+    if (!video) return;
+
+    video.muted = isRemoteMuted;
+
+    if (previousRemoteStream.current !== stream) {
+      video.srcObject = stream;
+      previousRemoteStream.current = stream;
+      if (stream) {
+        video.play().catch(() => {
+          /* autoplay suppressed */
+        });
+      } else {
+        video.pause();
+      }
+    }
+  }, [remoteStream, isRemoteMuted]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
