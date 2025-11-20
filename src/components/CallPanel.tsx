@@ -57,7 +57,8 @@ export function CallPanel({
       video.srcObject = stream;
       previousRemoteStream.current = stream;
       if (stream) {
-        video.play().catch(() => {
+        video.play().catch((error) => {
+          console.error("Error playing remote video:", error);
           /* autoplay suppressed */
         });
       } else {
@@ -84,6 +85,7 @@ export function CallPanel({
               ref={remoteVideoRef}
               autoPlay
               playsInline
+              muted={isRemoteMuted}
               className="h-60 w-full rounded-xl bg-black object-cover"
             />
             <p className="mt-2 text-center text-xs uppercase tracking-wide text-white/80">

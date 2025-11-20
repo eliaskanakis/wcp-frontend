@@ -48,7 +48,7 @@ export function usePeerConnection({
     localStream: null,
     remoteStream: null,
     isSelfMuted: false,
-    isRemoteMuted: false,
+    isRemoteMuted: true,
   });
 
   const ensurePeerConnection = useCallback(
