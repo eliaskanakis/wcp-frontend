@@ -71,6 +71,14 @@ export function usePeerConnection({
         ],
       });
 
+      (["audio", "video"] as const).forEach((kind) => {
+        try {
+          pc.addTransceiver(kind, { direction: "sendrecv" });
+        } catch {
+          /* Ignore addTransceiver issues on older browsers */
+        }
+      });
+
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
         onPeerEvent?.("local-ice", JSON.stringify(event.candidate));
