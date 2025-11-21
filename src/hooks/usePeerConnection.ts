@@ -408,9 +408,6 @@ export function usePeerConnection({
       dummy.play().catch(() => { });
     }
 
-    stream.getTracks().forEach(track => { … });
-
-
     stream.getTracks().forEach(track => {
       const senderExists = pc.getSenders().some(
         sender => sender.track?.kind === track.kind
