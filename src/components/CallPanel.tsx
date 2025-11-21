@@ -2,6 +2,10 @@
 
 import { useEffect, useRef } from "react";
 
+const DEBUG_CALLS =
+  typeof process !== "undefined" &&
+  process.env.NEXT_PUBLIC_CALL_DEBUG === "true";
+
 type CallPanelProps = {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
@@ -63,26 +67,57 @@ export function CallPanel({
       return;
     }
 
-    if (video.srcObject !== remoteStream) {
-      video.srcObject = remoteStream;
+    video.srcObject = null;
+    const cloned = new MediaStream();
+    remoteStream.getVideoTracks().forEach((track) => {
+      cloned.addTrack(track);
+    });
+    remoteStream.getAudioTracks().forEach((track) => {
+      cloned.addTrack(track);
+    });
+    video.srcObject = cloned;
+    if (DEBUG_CALLS) {
+      console.log("[RTC] call-panel remote stream", {
+        id: cloned.id,
+        tracks: cloned.getTracks().map((track) => ({
+          kind: track.kind,
+          readyState: track.readyState,
+          enabled: track.enabled,
+        })),
+      });
     }
     const attemptPlay = () => {
-      void video.play().catch((error) => {
-        console.error("Error playing remote video:", error);
-      });
+      const playPromise = video.play();
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise.catch((error: DOMException) => {
+          if (
+            error.name === "NotAllowedError" ||
+            error.name === "NotSupportedError"
+          ) {
+            console.warn("Retrying remote video play due to:", error.name);
+            setTimeout(attemptPlay, 500);
+            return;
+          }
+          console.error("Error playing remote video:", error);
+        });
+      }
+      if (DEBUG_CALLS) {
+        console.log("[RTC] call-panel video metrics", {
+          readyState: video.readyState,
+          width: video.videoWidth,
+          height: video.videoHeight,
+        });
+      }
     };
-    if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    const handleLoaded = () => {
+      video.removeEventListener("loadedmetadata", handleLoaded);
       attemptPlay();
-    } else {
-      const handleLoaded = () => {
-        video.removeEventListener("loadedmetadata", handleLoaded);
-        attemptPlay();
-      };
-      video.addEventListener("loadedmetadata", handleLoaded);
-      return () => {
-        video.removeEventListener("loadedmetadata", handleLoaded);
-      };
-    }
+    };
+    video.addEventListener("loadedmetadata", handleLoaded);
+    attemptPlay();
+    return () => {
+      video.removeEventListener("loadedmetadata", handleLoaded);
+    };
   }, [remoteStream, isRemoteMuted]);
 
   return (
@@ -104,6 +139,7 @@ export function CallPanel({
               autoPlay
               playsInline
               muted={isRemoteMuted}
+              data-remote-video
               className="h-60 w-full rounded-xl bg-black object-cover"
             />
             <p className="mt-2 text-center text-xs uppercase tracking-wide text-white/80">

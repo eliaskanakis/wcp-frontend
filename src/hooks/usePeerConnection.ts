@@ -163,32 +163,37 @@ export function usePeerConnection({
         const assignStream = (stream: MediaStream) => {
           remoteStreamRef.current = stream;
           setState((prev) => ({ ...prev, remoteStream: stream }));
+          if (DEBUG_CALLS) {
+            console.log("[RTC] remote-stream:update", {
+              sessionId: sessionIdRef.current,
+              tracks: stream?.getTracks().map((track) => ({
+                kind: track.kind,
+                enabled: track.enabled,
+                muted: track.muted,
+                readyState: track.readyState,
+              })),
+            });
+          }
           onPeerEvent?.("remote-track", event.track.kind);
         };
 
-        if (event.streams && event.streams[0]) {
-          const [stream] = event.streams;
-          if (event.track.muted) {
-            event.track.onunmute = () => {
-              event.track.onunmute = null;
-              assignStream(stream);
-            };
-          } else {
-            assignStream(stream);
+        const ensureStream = () => {
+          if (event.streams && event.streams[0]) {
+            assignStream(event.streams[0]);
+            return;
           }
-        } else {
-          const inboundStream = remoteStreamRef.current
-            ? new MediaStream(remoteStreamRef.current)
-            : new MediaStream();
+          const inboundStream = new MediaStream();
           inboundStream.addTrack(event.track);
-          if (event.track.muted) {
-            event.track.onunmute = () => {
-              event.track.onunmute = null;
-              assignStream(inboundStream);
-            };
-          } else {
-            assignStream(inboundStream);
-          }
+          assignStream(inboundStream);
+        };
+
+        if (event.track.muted) {
+          event.track.onunmute = () => {
+            event.track.onunmute = null;
+            ensureStream();
+          };
+        } else {
+          ensureStream();
         }
       };
 
