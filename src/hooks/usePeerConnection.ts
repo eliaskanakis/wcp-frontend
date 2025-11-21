@@ -38,6 +38,11 @@ export type PeerConnectionState = {
 
 type MediaTransceiverMap = Partial<Record<"audio" | "video", RTCRtpTransceiver>>;
 
+const createSessionId = () => Math.random().toString(36).slice(2, 10);
+const DEBUG_CALLS =
+  typeof process !== "undefined" &&
+  process.env.NEXT_PUBLIC_CALL_DEBUG === "true";
+
 export function usePeerConnection({
   channelId,
   currentName,
@@ -50,6 +55,7 @@ export function usePeerConnection({
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const targetUserIdRef = useRef<string | null>(null);
   const transceiversRef = useRef<MediaTransceiverMap>({});
+  const sessionIdRef = useRef<string>(createSessionId());
 
   const [state, setState] = useState<PeerConnectionState>({
     localStream: null,
@@ -60,18 +66,59 @@ export function usePeerConnection({
     iceState: "new",
   });
 
+  const emitDebug = useCallback(
+    (event: string, detail?: unknown) => {
+      if (!DEBUG_CALLS || !onPeerEvent) return;
+      if (detail === undefined) {
+        onPeerEvent(event);
+        return;
+      }
+      try {
+        const payload =
+          typeof detail === "string" ? detail : JSON.stringify(detail);
+        onPeerEvent(event, payload);
+      } catch {
+        onPeerEvent(event, String(detail));
+      }
+    },
+    [onPeerEvent]
+  );
+
   const ensurePeerConnection = useCallback(
     async (targetUserId?: string) => {
       if (targetUserId) {
         targetUserIdRef.current = targetUserId;
       }
-      if (peerRef.current) return peerRef.current;
+      if (peerRef.current) {
+        if (
+          peerRef.current.connectionState === "closed" ||
+          peerRef.current.signalingState === "closed"
+        ) {
+          emitDebug("pc-closed-recycle", {
+            sessionId: sessionIdRef.current,
+          });
+          peerRef.current = null;
+        } else {
+          emitDebug("pc-reuse", {
+            sessionId: sessionIdRef.current,
+            targetUserId: targetUserIdRef.current,
+            signalingState: peerRef.current.signalingState,
+            connectionState: peerRef.current.connectionState,
+          });
+          return peerRef.current;
+        }
+      }
 
+      sessionIdRef.current = createSessionId();
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
         ],
+      });
+      emitDebug("pc-created", {
+        sessionId: sessionIdRef.current,
+        targetUserId: targetUserIdRef.current,
       });
 
       const configured: MediaTransceiverMap = {};
@@ -86,6 +133,11 @@ export function usePeerConnection({
         }
       });
       transceiversRef.current = configured;
+      emitDebug("pc-transceivers", {
+        sessionId: sessionIdRef.current,
+        audio: Boolean(configured.audio),
+        video: Boolean(configured.video),
+      });
 
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
@@ -102,6 +154,12 @@ export function usePeerConnection({
       };
 
       pc.ontrack = (event) => {
+        emitDebug("ontrack", {
+          sessionId: sessionIdRef.current,
+          track: event.track.kind,
+          muted: event.track.muted,
+          streams: event.streams?.length ?? 0,
+        });
         const assignStream = (stream: MediaStream) => {
           remoteStreamRef.current = stream;
           setState((prev) => ({ ...prev, remoteStream: stream }));
@@ -119,10 +177,10 @@ export function usePeerConnection({
             assignStream(stream);
           }
         } else {
-          const inboundStream =
-            remoteStreamRef.current ?? new MediaStream();
+          const inboundStream = remoteStreamRef.current
+            ? new MediaStream(remoteStreamRef.current)
+            : new MediaStream();
           inboundStream.addTrack(event.track);
-          remoteStreamRef.current = inboundStream;
           if (event.track.muted) {
             event.track.onunmute = () => {
               event.track.onunmute = null;
@@ -137,17 +195,27 @@ export function usePeerConnection({
       pc.onconnectionstatechange = () => {
         onPeerEvent?.("connection-state", pc.connectionState);
         setState((prev) => ({ ...prev, connectionState: pc.connectionState }));
+        emitDebug("pc-conn-change", {
+          sessionId: sessionIdRef.current,
+          connectionState: pc.connectionState,
+          signalingState: pc.signalingState,
+          iceState: pc.iceConnectionState,
+        });
       };
 
       pc.oniceconnectionstatechange = () => {
         onPeerEvent?.("ice-state", pc.iceConnectionState);
         setState((prev) => ({ ...prev, iceState: pc.iceConnectionState }));
+        emitDebug("pc-ice-change", {
+          sessionId: sessionIdRef.current,
+          iceState: pc.iceConnectionState,
+        });
       };
 
       peerRef.current = pc;
       return pc;
     },
-    [channelId, currentName, onPeerEvent, sendSignal]
+    [channelId, currentName, emitDebug, sendSignal]
   );
 
   const obtainLocalStream = useCallback(async () => {
@@ -204,6 +272,11 @@ export function usePeerConnection({
       const hasConfiguredTransceivers = Boolean(
         transceivers.audio || transceivers.video
       );
+      emitDebug("add-tracks:start", {
+        sessionId: sessionIdRef.current,
+        trackKinds: stream.getTracks().map((track) => track.kind),
+        signalingState: pc.signalingState,
+      });
 
       if (hasConfiguredTransceivers) {
         const replacements: Promise<void>[] = [];
@@ -242,6 +315,10 @@ export function usePeerConnection({
             }
           });
         }
+        emitDebug("add-tracks:done", {
+          sessionId: sessionIdRef.current,
+          via: "transceiver",
+        });
         return;
       }
 
@@ -254,24 +331,44 @@ export function usePeerConnection({
           pc.addTrack(track, stream);
         }
       });
+      emitDebug("add-tracks:done", {
+        sessionId: sessionIdRef.current,
+        via: "addTrack",
+      });
     },
-    [obtainLocalStream]
+    [emitDebug, obtainLocalStream]
   );
 
   const createOffer = useCallback(
     async (targetUserId: string) => {
       const pc = await ensurePeerConnection(targetUserId);
+      emitDebug("create-offer:start", {
+        sessionId: sessionIdRef.current,
+        signalingState: pc.signalingState,
+      });
       await addLocalTracks(pc);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      emitDebug("create-offer:success", {
+        sessionId: sessionIdRef.current,
+        sdpType: offer.type,
+        sdpLines: offer.sdp ? offer.sdp.split("\n").length : 0,
+        signalingState: pc.signalingState,
+      });
       return offer;
     },
-    [addLocalTracks, ensurePeerConnection]
+    [addLocalTracks, emitDebug, ensurePeerConnection]
   );
 
   const acceptOffer = useCallback(
     async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
       const pc = await ensurePeerConnection(targetUserId);
+      emitDebug("accept-offer:start", {
+        sessionId: sessionIdRef.current,
+        offerType: offer.type,
+        sdpLines: offer.sdp ? offer.sdp.split("\n").length : 0,
+        signalingState: pc.signalingState,
+      });
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       await addLocalTracks(pc);
       pc.getTransceivers().forEach((transceiver) => {
@@ -281,24 +378,51 @@ export function usePeerConnection({
       });
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      emitDebug("accept-offer:answer", {
+        sessionId: sessionIdRef.current,
+        signalingState: pc.signalingState,
+        answerType: answer.type,
+        sdpLines: answer.sdp ? answer.sdp.split("\n").length : 0,
+      });
       return answer;
     },
-    [addLocalTracks, ensurePeerConnection]
+    [addLocalTracks, emitDebug, ensurePeerConnection]
   );
 
-  const handleAnswer = useCallback(async (answer: RTCSessionDescriptionInit) => {
-    if (!peerRef.current) return;
-    await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-  }, []);
+  const handleAnswer = useCallback(
+    async (answer: RTCSessionDescriptionInit) => {
+      if (!peerRef.current) return;
+      emitDebug("handle-answer", {
+        sessionId: sessionIdRef.current,
+        signalingState: peerRef.current.signalingState,
+        answerType: answer.type,
+        sdpLines: answer.sdp ? answer.sdp.split("\n").length : 0,
+      });
+      await peerRef.current.setRemoteDescription(
+        new RTCSessionDescription(answer)
+      );
+    },
+    [emitDebug]
+  );
 
-  const handleRemoteIce = useCallback(async (candidate: RTCIceCandidateInit) => {
-    if (!peerRef.current || !candidate) return;
-    try {
-      await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (error) {
-      console.error("Failed to add remote ICE candidate", error);
-    }
-  }, []);
+  const handleRemoteIce = useCallback(
+    async (candidate: RTCIceCandidateInit) => {
+      if (!peerRef.current || !candidate) return;
+      try {
+        emitDebug("remote-ice", {
+          sessionId: sessionIdRef.current,
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex: candidate.sdpMLineIndex,
+          signalingState: peerRef.current.signalingState,
+        });
+        await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error("Failed to add remote ICE candidate", error);
+      }
+    },
+    [emitDebug]
+  );
 
   const endCall = useCallback(() => {
     peerRef.current?.getSenders().forEach((sender) => sender.track?.stop());
@@ -309,6 +433,8 @@ export function usePeerConnection({
     remoteStreamRef.current = null;
     targetUserIdRef.current = null;
     transceiversRef.current = {};
+    sessionIdRef.current = createSessionId();
+    emitDebug("pc-reset", { sessionId: sessionIdRef.current });
     setState({
       localStream: null,
       remoteStream: null,
@@ -317,7 +443,7 @@ export function usePeerConnection({
       connectionState: "new",
       iceState: "new",
     });
-  }, []);
+  }, [emitDebug]);
 
   const toggleMuteSelf = useCallback(() => {
     if (!localStreamRef.current) return;

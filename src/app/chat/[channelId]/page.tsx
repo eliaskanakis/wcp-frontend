@@ -97,6 +97,28 @@ export default function ChannelChatPage({
   const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const outgoingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const DEBUG_CALLS =
+    typeof process !== "undefined" &&
+    process.env.NEXT_PUBLIC_CALL_DEBUG === "true";
+
+  const debugWs = useCallback((label: string, payload?: unknown) => {
+    if (process.env.NODE_ENV === "production" || !DEBUG_CALLS) return;
+    if (payload === undefined) {
+      console.log("[WS]", label);
+    } else {
+      console.log("[WS]", label, payload);
+    }
+  }, [DEBUG_CALLS]);
+
+  const debugCall = useCallback((label: string, payload?: unknown) => {
+    if (process.env.NODE_ENV === "production" || !DEBUG_CALLS) return;
+    if (payload === undefined) {
+      console.log("[CALL]", label);
+    } else {
+      console.log("[CALL]", label, payload);
+    }
+  }, [DEBUG_CALLS]);
+
   const pushSystemMessage = useCallback((text: string, isError = false) => {
     setMessages((prev) => [
       ...prev,
@@ -111,8 +133,9 @@ export default function ChannelChatPage({
   const sendSocketPayload = useCallback((payload: OutboundMessage) => {
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    debugWs("send", { type: payload.type, targetUserId: payload.targetUserId });
     socket.send(JSON.stringify(payload));
-  }, []);
+  }, [debugWs]);
 
   const signalSender = useCallback(
     (payload: {
@@ -125,6 +148,7 @@ export default function ChannelChatPage({
       sdp?: RTCSessionDescriptionInit;
       ice?: RTCIceCandidateInit;
     }) => {
+      debugWs("signal", { type: payload.type, targetUserId: payload.targetUserId });
       sendSocketPayload({
         type: payload.type as OutboundMessageType,
         channelId: payload.channelId,
@@ -136,7 +160,22 @@ export default function ChannelChatPage({
         ice: payload.ice,
       });
     },
-    [sendSocketPayload]
+    [debugWs, sendSocketPayload]
+  );
+
+  const handlePeerEvent = useCallback(
+    (event: string, detail?: string) => {
+      if (!DEBUG_CALLS || process.env.NODE_ENV === "production") return;
+      console.log("[RTC]", event, detail);
+    },
+    [DEBUG_CALLS]
+  );
+
+  const handlePeerError = useCallback(
+    (message: string) => {
+      pushSystemMessage(message, true);
+    },
+    [pushSystemMessage]
   );
 
   const {
@@ -152,12 +191,8 @@ export default function ChannelChatPage({
     channelId,
     currentName: senderName,
     sendSignal: signalSender,
-    onError: (message) => pushSystemMessage(message, true),
-    onPeerEvent: (event, detail) => {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[RTC]", event, detail);
-      }
-    },
+    onError: handlePeerError,
+    onPeerEvent: handlePeerEvent,
   });
 
   const clearIncomingTimer = () => {
@@ -181,14 +216,17 @@ export default function ChannelChatPage({
     setOutgoingCall(null);
     setActiveCall(null);
     endPeerConnection();
-  }, [endPeerConnection]);
+    debugCall("reset-call-state");
+  }, [debugCall, endPeerConnection]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !canView) return;
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
+    debugWs("socket:init", { url: WS_URL });
     ws.onopen = async () => {
       setStatus("connected");
+       debugWs("socket:open");
       let token: string | null = null;
       if (auth.currentUser) {
         try {
@@ -205,11 +243,19 @@ export default function ChannelChatPage({
         text: null,
       });
     };
-    ws.onclose = () => setStatus("disconnected");
-    ws.onerror = () => setStatus("disconnected");
+    ws.onclose = () => {
+      debugWs("socket:close");
+      setStatus("disconnected");
+    };
+    ws.onerror = (event) => {
+      debugWs("socket:error", event);
+      setStatus("disconnected");
+    };
     ws.onmessage = async (event) => {
+      debugWs("recv:raw", event.data);
       try {
         const msg = JSON.parse(event.data);
+        debugWs("recv:parsed", { type: msg.type, meta: { userId: msg.userId, targetUserId: msg.targetUserId } });
         if (msg.type === "system") {
           pushSystemMessage(msg.text);
         } else if (msg.type === "error") {
@@ -251,14 +297,21 @@ export default function ChannelChatPage({
           }
           setHistoryLoaded(true);
         } else if (msg.type === "channel-users") {
-          setRoster(
-            Array.isArray(msg.users)
-              ? msg.users.map((user: RosterUser) => ({
+          if (Array.isArray(msg.users)) {
+            const unique = new Map<string, RosterUser>();
+            msg.users.forEach((user: RosterUser) => {
+              const key = user.userId || `anon-${user.username}`;
+              if (!unique.has(key)) {
+                unique.set(key, {
                   userId: user.userId,
                   username: user.username,
-                }))
-              : []
-          );
+                });
+              }
+            });
+            setRoster(Array.from(unique.values()));
+          } else {
+            setRoster([]);
+          }
         } else if (msg.type === "user-joined") {
           setRoster((prev) => {
             if (prev.some((user) => user.userId === msg.userId)) return prev;
@@ -269,8 +322,17 @@ export default function ChannelChatPage({
             prev.filter((user) => user.userId !== msg.userId)
           );
         } else if (msg.type === "webrtc-ice" && msg.ice) {
+          debugCall("recv:ice", {
+            fromUserId: msg.userId,
+            targetUserId: msg.targetUserId,
+            sdpMid: msg.ice.sdpMid,
+          });
           await handleRemoteIce(msg.ice);
         } else if (msg.type === "webrtc-answer" && msg.sdp) {
+          debugCall("recv:answer", {
+            fromUserId: msg.userId,
+            targetUserId: msg.targetUserId,
+          });
           await handleAnswer(msg.sdp);
           clearOutgoingTimer();
           setActiveCall(
@@ -282,6 +344,10 @@ export default function ChannelChatPage({
           if (msg.targetUserId && msg.targetUserId !== currentUserId) {
             return;
           }
+          debugCall("recv:offer", {
+            fromUserId: msg.userId,
+            targetUserId: msg.targetUserId,
+          });
           resetCallState();
           const callerId = msg.userId;
           const callerName = msg.from;
@@ -309,12 +375,15 @@ export default function ChannelChatPage({
             endPeerConnection();
           }, 15000);
         } else if (msg.type === "call-cancelled") {
+          debugCall("recv:call-cancelled", { fromUserId: msg.userId });
           pushSystemMessage(`${msg.from} cancelled the call.`);
           resetCallState();
         } else if (msg.type === "call-rejected") {
+          debugCall("recv:call-rejected", { fromUserId: msg.userId });
           pushSystemMessage(`${msg.from} rejected the call.`);
           resetCallState();
         } else if (msg.type === "call-ended") {
+          debugCall("recv:call-ended", { fromUserId: msg.userId });
           pushSystemMessage(`${msg.from} ended the call.`);
           resetCallState();
         }
@@ -323,7 +392,6 @@ export default function ChannelChatPage({
       }
     };
     return () => {
-      console.log(senderName+" disconnected due to dismount");
       ws.close();
     };
   }, [
@@ -337,6 +405,7 @@ export default function ChannelChatPage({
     resetCallState,
     sendSocketPayload,
     senderName,
+    debugWs,
   ]);
 
   useEffect(() => {
@@ -423,6 +492,7 @@ export default function ChannelChatPage({
         return;
       }
       endPeerConnection();
+      debugCall("initiate:start", { targetUserId, targetName });
       try {
         const offer = await createOffer(targetUserId);
         let token: string | null = null;
@@ -438,6 +508,10 @@ export default function ChannelChatPage({
           text: null,
           targetUserId,
           sdp: offer,
+        });
+        debugCall("initiate:offer-sent", {
+          targetUserId,
+          sdpLines: offer.sdp ? offer.sdp.split("\n").length : 0,
         });
         pushSystemMessage(`Calling ${targetName}...`);
         clearOutgoingTimer();
@@ -456,11 +530,13 @@ export default function ChannelChatPage({
             current && current.userId === targetUserId ? null : current
           );
           endPeerConnection();
+          debugCall("initiate:timeout", { targetUserId });
         }, 15000);
       } catch (error) {
         console.error("Call initiation failed", error);
         pushSystemMessage("Unable to start the call.", true);
         endPeerConnection();
+        debugCall("initiate:error", { targetUserId, message: (error as Error)?.message });
       }
     },
     [
@@ -468,6 +544,7 @@ export default function ChannelChatPage({
       channelId,
       createOffer,
       endPeerConnection,
+      debugCall,
       outgoingCall,
       pushSystemMessage,
       sendSocketPayload,
@@ -477,6 +554,7 @@ export default function ChannelChatPage({
 
   const cancelOutgoingCall = useCallback(() => {
     if (!outgoingCall) return;
+    debugCall("outgoing:cancel", { targetUserId: outgoingCall.userId });
     sendSocketPayload({
       type: "call-cancelled",
       channelId,
@@ -493,6 +571,7 @@ export default function ChannelChatPage({
   }, [
     channelId,
     endPeerConnection,
+    debugCall,
     outgoingCall,
     pushSystemMessage,
     sendSocketPayload,
@@ -503,6 +582,7 @@ export default function ChannelChatPage({
     if (!incomingCall) return;
     clearIncomingTimer();
     endPeerConnection();
+    debugCall("incoming:answering", { fromUserId: incomingCall.fromUserId });
     try {
       const answer = await acceptOffer(
         incomingCall.sdp,
@@ -527,16 +607,22 @@ export default function ChannelChatPage({
       });
       setIncomingCall(null);
       pushSystemMessage(`Connected with ${incomingCall.fromName}.`);
+      debugCall("incoming:answered", { fromUserId: incomingCall.fromUserId });
     } catch (error) {
       console.error("Call answer failed", error);
       pushSystemMessage("Unable to answer call.", true);
       setIncomingCall(null);
       endPeerConnection();
+      debugCall("incoming:answer-error", {
+        fromUserId: incomingCall.fromUserId,
+        message: (error as Error)?.message,
+      });
     }
   }, [
     acceptOffer,
     channelId,
     endPeerConnection,
+    debugCall,
     incomingCall,
     pushSystemMessage,
     sendSocketPayload,
@@ -546,6 +632,7 @@ export default function ChannelChatPage({
   const rejectIncomingCall = useCallback(
     (reason = "rejected") => {
       if (!incomingCall) return;
+       debugCall("incoming:reject", { fromUserId: incomingCall.fromUserId, reason });
       sendSocketPayload({
         type: "call-rejected",
         channelId,
@@ -563,6 +650,7 @@ export default function ChannelChatPage({
     [
       channelId,
       endPeerConnection,
+      debugCall,
       incomingCall,
       pushSystemMessage,
       sendSocketPayload,
@@ -572,6 +660,7 @@ export default function ChannelChatPage({
 
   const endActiveCall = useCallback(() => {
     if (!activeCall) return;
+    debugCall("active:end", { userId: activeCall.userId });
     sendSocketPayload({
       type: "call-ended",
       channelId,
@@ -585,6 +674,7 @@ export default function ChannelChatPage({
   }, [
     activeCall,
     channelId,
+    debugCall,
     pushSystemMessage,
     resetCallState,
     sendSocketPayload,

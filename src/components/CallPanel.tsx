@@ -25,45 +25,63 @@ export function CallPanel({
 }: CallPanelProps) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const previousLocalStream = useRef<MediaStream | null>(null);
-  const previousRemoteStream = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     const video = localVideoRef.current;
-    const stream = localStream ?? null;
     if (!video) return;
 
-    if (previousLocalStream.current !== stream) {
-      video.srcObject = stream;
-      previousLocalStream.current = stream;
-      if (stream) {
-        video.play().catch(() => {
-          /* autoplay suppressed */
-        });
-      } else {
-        video.pause();
-      }
+    if (!localStream) {
+      video.srcObject = null;
+      video.pause();
+      return;
+    }
+
+    if (video.srcObject !== localStream) {
+      video.srcObject = localStream;
+    }
+    const attemptPlay = () => {
+      void video.play().catch(() => {
+        /* autoplay suppressed */
+      });
+    };
+    if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+      attemptPlay();
+    } else {
+      video.onloadedmetadata = attemptPlay;
     }
   }, [localStream]);
 
   useEffect(() => {
     const video = remoteVideoRef.current;
-    const stream = remoteStream ?? null;
     if (!video) return;
 
     video.muted = isRemoteMuted;
 
-    if (previousRemoteStream.current !== stream) {
-      video.srcObject = stream;
-      previousRemoteStream.current = stream;
-      if (stream) {
-        video.play().catch((error) => {
-          console.error("Error playing remote video:", error);
-          /* autoplay suppressed */
-        });
-      } else {
-        video.pause();
-      }
+    if (!remoteStream) {
+      video.srcObject = null;
+      video.pause();
+      return;
+    }
+
+    if (video.srcObject !== remoteStream) {
+      video.srcObject = remoteStream;
+    }
+    const attemptPlay = () => {
+      void video.play().catch((error) => {
+        console.error("Error playing remote video:", error);
+      });
+    };
+    if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+      attemptPlay();
+    } else {
+      const handleLoaded = () => {
+        video.removeEventListener("loadedmetadata", handleLoaded);
+        attemptPlay();
+      };
+      video.addEventListener("loadedmetadata", handleLoaded);
+      return () => {
+        video.removeEventListener("loadedmetadata", handleLoaded);
+      };
     }
   }, [remoteStream, isRemoteMuted]);
 
