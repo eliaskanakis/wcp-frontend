@@ -151,25 +151,33 @@ export function usePeerConnection({
           });
         }
 
+        // Helper to force re-attach & play remote video
+        const forcePlayRemote = (stream: MediaStream) => {
+          setTimeout(() => {
+            const el = document.getElementById("remoteVideo") as HTMLVideoElement | null;
+            if (!el) return;
+            el.srcObject = stream;
+            el.muted = state.isRemoteMuted; // your setting
+            el
+              .play()
+              .catch((e) => console.warn("[RTC] remote video play() failed:", e));
+          }, 50);
+        };
+
         // ----------------------------------------------------------
         // CASE 1 — SAFARI / ANDROID: event.streams[0] MUST BE USED
         // ----------------------------------------------------------
         if (event.streams && event.streams[0]) {
           const incomingStream = event.streams[0];
 
-          // If this stream is new OR if video arrived → bind it
-          if (
-            !remoteStreamRef.current ||
-            event.track.kind === "video" // ensure video binds even if audio came first
-          ) {
+          // Bind immediately if new or if this is the video track coming in
+          if (!remoteStreamRef.current || event.track.kind === "video") {
             remoteStreamRef.current = incomingStream;
-            setState((prev) => ({
-              ...prev,
-              remoteStream: incomingStream,
-            }));
+            setState((prev) => ({ ...prev, remoteStream: incomingStream }));
+            forcePlayRemote(incomingStream);
           }
 
-          // Handle Safari muted video problem
+          // Safari muted video problem
           if (event.track.kind === "video") {
             if (event.track.muted) {
               console.log("[RTC] video muted → requesting keyframe");
@@ -183,17 +191,17 @@ export function usePeerConnection({
               } catch (_) { }
 
               event.track.onunmute = () => {
-                event.track.onunmute = null;
                 console.log("[RTC] video track unmuted!");
-                setState((prev) => ({
-                  ...prev,
-                  remoteStream: incomingStream,
-                }));
+                event.track.onunmute = null;
+
+                remoteStreamRef.current = incomingStream;
+                setState((prev) => ({ ...prev, remoteStream: incomingStream }));
+                forcePlayRemote(incomingStream);
               };
             }
           }
 
-          return; // 🚀 IMPORTANT: do NOT fall into fallback logic
+          return; // 🚀 DO NOT fall into fallback logic
         }
 
         // ----------------------------------------------------------
@@ -201,10 +209,7 @@ export function usePeerConnection({
         // ----------------------------------------------------------
         if (!remoteStreamRef.current) {
           remoteStreamRef.current = new MediaStream();
-          setState((prev) => ({
-            ...prev,
-            remoteStream: remoteStreamRef.current!,
-          }));
+          setState((prev) => ({ ...prev, remoteStream: remoteStreamRef.current! }));
         }
 
         const compositeStream = remoteStreamRef.current;
@@ -226,16 +231,17 @@ export function usePeerConnection({
           } catch (_) { }
 
           event.track.onunmute = () => {
-            event.track.onunmute = null;
             console.log("[RTC] video track unmuted!");
+            event.track.onunmute = null;
+
+            remoteStreamRef.current = compositeStream;
             setState((prev) => ({ ...prev, remoteStream: compositeStream }));
+            forcePlayRemote(compositeStream);
           };
         }
 
-        setState((prev) => ({
-          ...prev,
-          remoteStream: compositeStream,
-        }));
+        setState((prev) => ({ ...prev, remoteStream: compositeStream }));
+        forcePlayRemote(compositeStream);
       };
 
       pc.onconnectionstatechange = () => {
@@ -389,7 +395,7 @@ export function usePeerConnection({
     const pc = await ensurePeerConnection(targetUserId);
 
     if (DEBUG_CALLS) {
-      console.log("REMOTE OFFER SDP (PATCHED):\n", offer);
+      console.log("REMOTE OFFER SDP:\n", offer);
     }
     await pc.setRemoteDescription(offer);
 

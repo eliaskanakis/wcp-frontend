@@ -58,52 +58,62 @@ export function CallPanel({
 
   useEffect(() => {
     if (DEBUG_CALLS) {
-      console.log("REMOTE STREAM USE EFFECT CALLED, remoteStream:", remoteStream);
+      console.log("REMOTE STREAM EFFECT — stream =", remoteStream);
     }
+
     const video = remoteVideoRef.current;
     if (!video) return;
 
     video.muted = isRemoteMuted;
 
+    // 1. No remote stream → clear video element
     if (!remoteStream) {
       video.srcObject = null;
       video.pause();
       return;
     }
 
+    // 2. Always reattach stream (important for Safari & Chrome)
     if (video.srcObject !== remoteStream) {
-      if (DEBUG_CALLS) {
-        console.log("REMOTE STREAM CHANGED", remoteStream);
-      }
+      if (DEBUG_CALLS) console.log("🟦 Rebinding remote stream");
       video.srcObject = remoteStream;
-    } else {
-      if (DEBUG_CALLS) {
-        console.log("REMOTE STREAM DID NOT CHANGE", remoteStream);
-      }
-    }
-    const hasVideo = remoteStream.getVideoTracks().length > 0;
-
-    if (!hasVideo) {
-      // Wait until video track arrives
-      console.log("WAITING FOR VIDEO TRACK…");
-      return;
     }
 
+    // 3. Tracks may exist but video still not playable
     const attemptPlay = () => {
-      video.play().catch(err => {
-        console.log("REMOTE VIDEO PLAY ERROR", err);
-      });
+      video
+        .play()
+        .then(() => {
+          if (DEBUG_CALLS) console.log("🟩 remote video playing");
+        })
+        .catch((err) => {
+          console.log("🟥 remote video play() failed:", err);
+        });
     };
 
-    video.addEventListener("loadedmetadata", attemptPlay);
-    attemptPlay();
+    // 4. If metadata already loaded → try to play immediately
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      attemptPlay();
+    } else {
+      // otherwise wait until metadata arrives
+      video.onloadedmetadata = () => {
+        if (DEBUG_CALLS) console.log("📡 remote metadata loaded");
+        attemptPlay();
+      };
+    }
+
+    // 5. Also listen for loadeddata (Safari sometimes only fires this)
+    const loadedDataHandler = () => {
+      if (DEBUG_CALLS) console.log("📡 remote loadeddata");
+      attemptPlay();
+    };
+    video.addEventListener("loadeddata", loadedDataHandler);
 
     return () => {
-      video.removeEventListener("loadedmetadata", attemptPlay);
+      video.onloadedmetadata = null;
+      video.removeEventListener("loadeddata", loadedDataHandler);
     };
   }, [remoteStream, isRemoteMuted]);
-
-
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
