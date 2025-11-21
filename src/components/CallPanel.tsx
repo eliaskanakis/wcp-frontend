@@ -60,76 +60,29 @@ export function CallPanel({
     const video = remoteVideoRef.current;
     if (!video) return;
 
+    // 🔥 REQUIRED for Chrome to autoplay remote video
     video.muted = isRemoteMuted;
 
     if (!remoteStream) {
       video.srcObject = null;
       video.pause();
-      previousRemoteIdRef.current = null;
       return;
     }
 
-    const isSameStream =
-      previousRemoteIdRef.current &&
-      previousRemoteIdRef.current === remoteStream.id;
-
-    if (!isSameStream) {
-      const cloned = new MediaStream();
-      remoteStream.getVideoTracks().forEach((track) => cloned.addTrack(track));
-      remoteStream.getAudioTracks().forEach((track) => cloned.addTrack(track));
-      video.srcObject = cloned;
-      previousRemoteIdRef.current = remoteStream.id;
-      if (DEBUG_CALLS) {
-        console.log("[RTC] call-panel remote stream", {
-          id: cloned.id,
-          sourceId: remoteStream.id,
-          tracks: cloned.getTracks().map((track) => ({
-            kind: track.kind,
-            readyState: track.readyState,
-            enabled: track.enabled,
-          })),
-        });
-      }
-    }
+    video.srcObject = remoteStream;
 
     const attemptPlay = () => {
-      const playPromise = video.play();
-      if (playPromise && typeof playPromise.catch === "function") {
-        playPromise.catch((error: DOMException) => {
-          if (
-            error.name === "NotAllowedError" ||
-            error.name === "NotSupportedError"
-          ) {
-            setTimeout(attemptPlay, 500);
-            return;
-          }
-          console.error("Error playing remote video:", error);
-        });
-      }
-      if (DEBUG_CALLS) {
-        console.log("[RTC] call-panel video metrics", {
-          readyState: video.readyState,
-          width: video.videoWidth,
-          height: video.videoHeight,
-        });
-      }
+      video.play().catch(() => { });
     };
 
-    const handleLoaded = () => {
-      video.removeEventListener("loadedmetadata", handleLoaded);
-      attemptPlay();
-    };
-
-    video.addEventListener("loadedmetadata", handleLoaded);
-
-    if (video.srcObject instanceof MediaStream) {
-      attemptPlay();
-    }
+    video.addEventListener("loadedmetadata", attemptPlay);
+    attemptPlay();
 
     return () => {
-      video.removeEventListener("loadedmetadata", handleLoaded);
+      video.removeEventListener("loadedmetadata", attemptPlay);
     };
   }, [remoteStream, isRemoteMuted]);
+
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
@@ -173,21 +126,19 @@ export function CallPanel({
         <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm font-semibold">
           <button
             onClick={onToggleSelfMute}
-            className={`rounded-full border px-4 py-1.5 transition ${
-              isSelfMuted
-                ? "border-rose-200 bg-rose-50 text-rose-600"
-                : "border-slate-200 text-slate-700 hover:border-slate-300"
-            }`}
+            className={`rounded-full border px-4 py-1.5 transition ${isSelfMuted
+              ? "border-rose-200 bg-rose-50 text-rose-600"
+              : "border-slate-200 text-slate-700 hover:border-slate-300"
+              }`}
           >
             {isSelfMuted ? "Unmute me" : "Mute me"}
           </button>
           <button
             onClick={onToggleRemoteMute}
-            className={`rounded-full border px-4 py-1.5 transition ${
-              isRemoteMuted
-                ? "border-indigo-200 bg-indigo-50 text-indigo-600"
-                : "border-slate-200 text-slate-700 hover:border-slate-300"
-            }`}
+            className={`rounded-full border px-4 py-1.5 transition ${isRemoteMuted
+              ? "border-indigo-200 bg-indigo-50 text-indigo-600"
+              : "border-slate-200 text-slate-700 hover:border-slate-300"
+              }`}
           >
             {isRemoteMuted ? "Hear remote" : "Silence remote"}
           </button>
