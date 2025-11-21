@@ -95,16 +95,6 @@ export function usePeerConnection({
         });
       }
 
-      (["audio", "video"] as const).forEach((kind) => {
-        try {
-          pc.addTransceiver(kind, { direction: "sendrecv" });
-        } catch (error) {
-          if (DEBUG_CALLS) {
-            console.warn("Failed to add transceiver", kind, error);
-          }
-        }
-      });
-
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
         if (DEBUG_CALLS) {
@@ -273,48 +263,50 @@ export function usePeerConnection({
     [obtainLocalStream]
   );
 
-  const createOffer = useCallback(
-    async (targetUserId: string) => {
-      const pc = await ensurePeerConnection(targetUserId);
-      const stream = await obtainLocalStream();
+  const createOffer = useCallback(async (targetUserId: string) => {
+    const pc = await ensurePeerConnection(targetUserId);
 
-      stream.getTracks().forEach((track) => {
-        const senderExists = pc
-          .getSenders()
-          .some((sender) => sender.track?.kind === track.kind);
-        if (!senderExists) {
-          pc.addTrack(track, stream);
-        }
-      });
+    const stream = await obtainLocalStream();
 
-      if (pc.getTransceivers().length === 0) {
-        pc.addTransceiver("video", { direction: "sendrecv" });
-        pc.addTransceiver("audio", { direction: "sendrecv" });
+    stream.getTracks().forEach(track => {
+      const senderExists = pc.getSenders().some(
+        sender => sender.track?.kind === track.kind
+      );
+      if (!senderExists) {
+        pc.addTrack(track, stream);
       }
+    });
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      return offer;
-    },
-    [ensurePeerConnection, obtainLocalStream]
-  );
+    const offer = await pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+    });
 
-  const acceptOffer = useCallback(
-    async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
-      const pc = await ensurePeerConnection(targetUserId);
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      await addLocalTracks(pc);
-      pc.getTransceivers().forEach((transceiver) => {
-        if (transceiver.receiver.track.kind === "video") {
-          transceiver.direction = "sendrecv";
-        }
-      });
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      return answer;
-    },
-    [addLocalTracks, ensurePeerConnection]
-  );
+    await pc.setLocalDescription(offer);
+    return offer;
+  }, [ensurePeerConnection, obtainLocalStream]);
+
+  const acceptOffer = useCallback(async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
+  const pc = await ensurePeerConnection(targetUserId);
+  await pc.setRemoteDescription(offer);
+
+  const stream = await obtainLocalStream();
+  stream.getTracks().forEach(track => {
+    const senderExists = pc.getSenders().some(
+      sender => sender.track?.kind === track.kind
+    );
+    if (!senderExists) {
+      pc.addTrack(track, stream);
+    }
+  });
+
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+
+  return answer;
+}, [ensurePeerConnection, obtainLocalStream]);
+
+  
 
   const handleAnswer = useCallback(async (answer: RTCSessionDescriptionInit) => {
     if (!peerRef.current) return;
