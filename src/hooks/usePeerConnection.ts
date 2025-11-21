@@ -131,10 +131,16 @@ export function usePeerConnection({
           if (event.track.muted) {
             event.track.onunmute = () => {
               event.track.onunmute = null;
-              assignStream(stream);
+              if (remoteStreamRef.current !== stream) {
+                remoteStreamRef.current = stream;
+                setState((prev) => ({ ...prev, remoteStream: stream }));
+              }
             };
           } else {
-            assignStream(stream);
+            if (remoteStreamRef.current !== stream) {
+              remoteStreamRef.current = stream;
+              setState((prev) => ({ ...prev, remoteStream: stream }));
+            }
           }
         } else {
           const inboundStream =
@@ -287,26 +293,26 @@ export function usePeerConnection({
   }, [ensurePeerConnection, obtainLocalStream]);
 
   const acceptOffer = useCallback(async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
-  const pc = await ensurePeerConnection(targetUserId);
-  await pc.setRemoteDescription(offer);
+    const pc = await ensurePeerConnection(targetUserId);
+    await pc.setRemoteDescription(offer);
 
-  const stream = await obtainLocalStream();
-  stream.getTracks().forEach(track => {
-    const senderExists = pc.getSenders().some(
-      sender => sender.track?.kind === track.kind
-    );
-    if (!senderExists) {
-      pc.addTrack(track, stream);
-    }
-  });
+    const stream = await obtainLocalStream();
+    stream.getTracks().forEach(track => {
+      const senderExists = pc.getSenders().some(
+        sender => sender.track?.kind === track.kind
+      );
+      if (!senderExists) {
+        pc.addTrack(track, stream);
+      }
+    });
 
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
 
-  return answer;
-}, [ensurePeerConnection, obtainLocalStream]);
+    return answer;
+  }, [ensurePeerConnection, obtainLocalStream]);
 
-  
+
 
   const handleAnswer = useCallback(async (answer: RTCSessionDescriptionInit) => {
     if (!peerRef.current) return;

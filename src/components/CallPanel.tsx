@@ -60,7 +60,6 @@ export function CallPanel({
     const video = remoteVideoRef.current;
     if (!video) return;
 
-    // 🔥 REQUIRED for Chrome to autoplay remote video
     video.muted = isRemoteMuted;
 
     if (!remoteStream) {
@@ -71,8 +70,18 @@ export function CallPanel({
 
     video.srcObject = remoteStream;
 
+    const hasVideo = remoteStream.getVideoTracks().length > 0;
+
+    if (!hasVideo) {
+      // Wait until video track arrives
+      console.log("WAITING FOR VIDEO TRACK…");
+      return;
+    }
+
     const attemptPlay = () => {
-      video.play().catch(() => { });
+      video.play().catch(err => {
+        console.log("REMOTE VIDEO PLAY ERROR", err);
+      });
     };
 
     video.addEventListener("loadedmetadata", attemptPlay);
@@ -82,6 +91,7 @@ export function CallPanel({
       video.removeEventListener("loadedmetadata", attemptPlay);
     };
   }, [remoteStream, isRemoteMuted]);
+
 
 
   return (
