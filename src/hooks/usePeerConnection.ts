@@ -96,7 +96,9 @@ export function usePeerConnection({
       };
 
       const pc = new RTCPeerConnection(PC_CONFIG);
-
+      pc.addTransceiver("video", { direction: "recvonly" });
+      pc.addTransceiver("audio", { direction: "recvonly" });
+      
       // ------------------ SAFARI → CHROME H264 BASELINE FIX ------------------
       try {
         const videoReceiverCaps = RTCRtpReceiver.getCapabilities("video")?.codecs ?? [];
