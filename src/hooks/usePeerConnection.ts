@@ -88,6 +88,38 @@ export function usePeerConnection({
           { urls: "stun:stun1.l.google.com:19302" },
         ],
       });
+
+      // ------------------ SAFARI → CHROME H264 BASELINE FIX ------------------
+      try {
+        const videoReceiverCaps = RTCRtpReceiver.getCapabilities("video")?.codecs ?? [];
+
+        // Safari offers many H.264 profiles, Chrome only reliably decodes Baseline
+        const baselineCodecs = videoReceiverCaps.filter(c =>
+          c.mimeType.toLowerCase() === "video/h264" &&
+          c.sdpFmtpLine?.toLowerCase().includes("profile-level-id=42e01f")
+        );
+
+        if (DEBUG_CALLS) {
+          console.log("[RTC] baseline codecs", baselineCodecs);
+        }
+
+        // Apply codec preferences to ALL video transceivers
+        pc.getTransceivers().forEach(t => {
+          if (t.receiver.track.kind === "video") {
+            try {
+              t.setCodecPreferences(baselineCodecs);
+              console.log("[RTC] setCodecPreferences applied");
+            } catch (err) {
+              console.warn("[RTC] codec preference error", err);
+            }
+          }
+        });
+      } catch (err) {
+        console.warn("[RTC] codec preference setup failed", err);
+      }
+      // ------------------------------------------------------------------------
+
+
       if (DEBUG_CALLS) {
         console.log("[RTC] pc-created", {
           sessionId: sessionIdRef.current,
@@ -120,41 +152,18 @@ export function usePeerConnection({
             streams: event.streams?.length ?? 0,
           });
         }
-        const assignStream = (stream: MediaStream) => {
-          remoteStreamRef.current = stream;
-          setState((prev) => ({ ...prev, remoteStream: stream }));
-          onPeerEvent?.("remote-track", event.track.kind);
-        };
 
-        if (event.streams && event.streams[0]) {
-          const [stream] = event.streams;
-          if (event.track.muted) {
-            event.track.onunmute = () => {
-              event.track.onunmute = null;
-              if (remoteStreamRef.current !== stream) {
-                remoteStreamRef.current = stream;
-                setState((prev) => ({ ...prev, remoteStream: stream }));
-              }
-            };
-          } else {
-            if (remoteStreamRef.current !== stream) {
-              remoteStreamRef.current = stream;
-              setState((prev) => ({ ...prev, remoteStream: stream }));
-            }
-          }
-        } else {
-          const inboundStream =
-            remoteStreamRef.current ?? new MediaStream();
-          inboundStream.addTrack(event.track);
-          remoteStreamRef.current = inboundStream;
-          if (event.track.muted) {
-            event.track.onunmute = () => {
-              event.track.onunmute = null;
-              assignStream(inboundStream);
-            };
-          } else {
-            assignStream(inboundStream);
-          }
+        if (!remoteStreamRef.current) {
+          // create stable stream ONCE
+          remoteStreamRef.current = new MediaStream();
+          setState(prev => ({ ...prev, remoteStream: remoteStreamRef.current }));
+        }
+
+        const remoteStream = remoteStreamRef.current;
+
+        // add track if not already present
+        if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
+          remoteStream.addTrack(event.track);
         }
       };
 
@@ -289,11 +298,19 @@ export function usePeerConnection({
     });
 
     await pc.setLocalDescription(offer);
+    if (DEBUG_CALLS) {
+      console.log("LOCAL ANSWER SDP:\n", pc.localDescription?.sdp);
+    }
+
     return offer;
   }, [ensurePeerConnection, obtainLocalStream]);
 
   const acceptOffer = useCallback(async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
     const pc = await ensurePeerConnection(targetUserId);
+
+    if (DEBUG_CALLS) {
+      console.log("REMOTE OFFER SDP:\n", offer);
+    }
     await pc.setRemoteDescription(offer);
 
     const stream = await obtainLocalStream();

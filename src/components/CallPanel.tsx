@@ -57,6 +57,9 @@ export function CallPanel({
   }, [localStream]);
 
   useEffect(() => {
+    if (DEBUG_CALLS) {
+      console.log("REMOTE STREAM USE EFFECT CALLED, remoteStream:", remoteStream);
+    }
     const video = remoteVideoRef.current;
     if (!video) return;
 
@@ -68,8 +71,16 @@ export function CallPanel({
       return;
     }
 
-    video.srcObject = remoteStream;
-
+    if (video.srcObject !== remoteStream) {
+      if (DEBUG_CALLS) {
+        console.log("REMOTE STREAM CHANGED", remoteStream);
+      }
+      video.srcObject = remoteStream;
+    } else {
+      if (DEBUG_CALLS) {
+        console.log("REMOTE STREAM DID NOT CHANGE", remoteStream);
+      }
+    }
     const hasVideo = remoteStream.getVideoTracks().length > 0;
 
     if (!hasVideo) {
