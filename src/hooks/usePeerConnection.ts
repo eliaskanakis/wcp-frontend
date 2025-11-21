@@ -21,6 +21,32 @@ function forceBaselineH264(pc: RTCPeerConnection) {
   }
 }
 
+function patchSafariOfferForChrome(sdp: string): string {
+  // Chrome needs both send + recv fmtp lines. Safari sends only one.
+  // We duplicate the existing H264 fmtp and convert it into a pair.
+
+  const h264Regex = /a=rtpmap:98 H264\/90000\r?\n(?:a=rtcp-fb:98.*\r?\n)*a=fmtp:98 (.*)\r?\n/;
+
+  const match = sdp.match(h264Regex);
+  if (!match) return sdp;
+
+  const fmtp = match[1];
+
+  const fullBlock =
+    "a=rtpmap:98 H264/90000\r\n" +
+    "a=rtcp-fb:98 goog-remb\r\n" +
+    "a=rtcp-fb:98 transport-cc\r\n" +
+    "a=rtcp-fb:98 ccm fir\r\n" +
+    "a=rtcp-fb:98 nack\r\n" +
+    "a=rtcp-fb:98 nack pli\r\n" +
+    `a=fmtp:98 ${fmtp}\r\n` +
+    // Safari should send a second fmtp, Chrome expects it:
+    `a=fmtp:98 ${fmtp}\r\n`;
+
+  return sdp.replace(h264Regex, fullBlock);
+}
+
+
 type SendSignal = (payload: {
   type: string;
   channelId: string;
@@ -373,6 +399,18 @@ export function usePeerConnection({
 
     const stream = await obtainLocalStream();
 
+    // Safari FIX — start flow
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      const dummy = document.createElement("video");
+      dummy.srcObject = new MediaStream([videoTrack]);
+      dummy.muted = true;
+      dummy.play().catch(() => { });
+    }
+
+    stream.getTracks().forEach(track => { … });
+
+
     stream.getTracks().forEach(track => {
       const senderExists = pc.getSenders().some(
         sender => sender.track?.kind === track.kind
@@ -399,10 +437,15 @@ export function usePeerConnection({
   const acceptOffer = useCallback(async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
     const pc = await ensurePeerConnection(targetUserId);
 
+    const patched = {
+      type: offer.type,
+      sdp: patchSafariOfferForChrome(offer.sdp!)
+    };
+
     if (DEBUG_CALLS) {
-      console.log("REMOTE OFFER SDP:\n", offer);
+      console.log("REMOTE OFFER SDP (PATCHED):\n", patched);
     }
-    await pc.setRemoteDescription(offer);
+    await pc.setRemoteDescription(patched);
 
     const stream = await obtainLocalStream();
     stream.getTracks().forEach(track => {
@@ -417,6 +460,19 @@ export function usePeerConnection({
     forceBaselineH264(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+
+    pc.getReceivers()
+      .filter(r => r.track?.kind === "video")
+      .forEach(r => {
+        try {
+          (r as any).requestKeyFrame?.();
+          console.log("[RTC] forced keyframe after answer");
+        } catch (e) { }
+      });
+
+    if (DEBUG_CALLS) {
+      console.log("LOCAL ANSWER SDP:\n", pc.localDescription?.sdp);
+    }
 
     return answer;
   }, [ensurePeerConnection, obtainLocalStream]);
