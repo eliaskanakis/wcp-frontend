@@ -2,6 +2,25 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+function forceBaselineH264(pc: RTCPeerConnection) {
+  const transceivers = pc.getTransceivers();
+  for (const t of transceivers) {
+    if (t.receiver && t.receiver.track.kind === "video") {
+      try {
+        t.setCodecPreferences([
+          {
+            mimeType: "video/H264",
+            clockRate: 90000,
+            sdpFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+          }
+        ]);
+      } catch (e) {
+        console.warn("Codec preference not supported", e);
+      }
+    }
+  }
+}
+
 type SendSignal = (payload: {
   type: string;
   channelId: string;
@@ -82,12 +101,20 @@ export function usePeerConnection({
       }
 
       sessionIdRef.current = createSessionId();
-      const pc = new RTCPeerConnection({
+
+      const PC_CONFIG = {
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
         ],
-      });
+        encodedInsertableStreams: false,
+        // CRITICAL SAFARI → CHROME FIX:
+        // Force hardware-baseline H264 decode only
+        sdpSemantics: "unified-plan",
+        iceCandidatePoolSize: 0,
+      };
+
+      const pc = new RTCPeerConnection(PC_CONFIG);
 
       // ------------------ SAFARI → CHROME H264 BASELINE FIX ------------------
       try {
@@ -103,17 +130,6 @@ export function usePeerConnection({
           console.log("[RTC] baseline codecs", baselineCodecs);
         }
 
-        // Apply codec preferences to ALL video transceivers
-        pc.getTransceivers().forEach(t => {
-          if (t.receiver.track.kind === "video") {
-            try {
-              t.setCodecPreferences(baselineCodecs);
-              console.log("[RTC] setCodecPreferences applied");
-            } catch (err) {
-              console.warn("[RTC] codec preference error", err);
-            }
-          }
-        });
       } catch (err) {
         console.warn("[RTC] codec preference setup failed", err);
       }
@@ -366,6 +382,7 @@ export function usePeerConnection({
       }
     });
 
+    forceBaselineH264(pc);
     const offer = await pc.createOffer({
       offerToReceiveAudio: true,
       offerToReceiveVideo: true,
@@ -397,6 +414,7 @@ export function usePeerConnection({
       }
     });
 
+    forceBaselineH264(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
