@@ -2,50 +2,35 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-function forceBaselineH264(pc: RTCPeerConnection) {
-  const transceivers = pc.getTransceivers();
-  for (const t of transceivers) {
-    if (t.receiver && t.receiver.track.kind === "video") {
-      try {
-        t.setCodecPreferences([
-          {
-            mimeType: "video/H264",
-            clockRate: 90000,
-            sdpFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
-          }
-        ]);
-      } catch (e) {
-        console.warn("Codec preference not supported", e);
-      }
-    }
+function forceVp8ForOffer(offer: RTCSessionDescriptionInit) {
+  if (!offer.sdp) return offer;
+
+  console.log("⚠️ Forcing VP8 for cross-device compatibility");
+
+  // Remove all H264 m-lines
+  offer.sdp = offer.sdp.replace(/m=video.*\r\n/g, (line) => {
+    return line.replace(/(96|97|98|99|100|101|102|119|120)/g, "120");
+  });
+
+  // Remove all H264 codec descriptions entirely
+  offer.sdp = offer.sdp.replace(/a=rtpmap:\d+ H264\/90000\r\n/g, "");
+  offer.sdp = offer.sdp.replace(/a=fmtp:\d+ .*\r\n/g, "");
+
+  // Add VP8 line if missing
+  if (!offer.sdp.includes("VP8/90000")) {
+    offer.sdp = offer.sdp.replace(
+      /m=video .*?\r\n/,
+      `m=video 9 UDP/TLS/RTP/SAVPF 120\r\n`
+    );
+
+    offer.sdp +=
+      "a=rtpmap:120 VP8/90000\r\n" +
+      "a=rtcp-fb:120 nack pli\r\n" +
+      "a=rtcp-fb:120 ccm fir\r\n";
   }
+
+  return offer;
 }
-
-function patchSafariOfferForChrome(sdp: string): string {
-  // Chrome needs both send + recv fmtp lines. Safari sends only one.
-  // We duplicate the existing H264 fmtp and convert it into a pair.
-
-  const h264Regex = /a=rtpmap:98 H264\/90000\r?\n(?:a=rtcp-fb:98.*\r?\n)*a=fmtp:98 (.*)\r?\n/;
-
-  const match = sdp.match(h264Regex);
-  if (!match) return sdp;
-
-  const fmtp = match[1];
-
-  const fullBlock =
-    "a=rtpmap:98 H264/90000\r\n" +
-    "a=rtcp-fb:98 goog-remb\r\n" +
-    "a=rtcp-fb:98 transport-cc\r\n" +
-    "a=rtcp-fb:98 ccm fir\r\n" +
-    "a=rtcp-fb:98 nack\r\n" +
-    "a=rtcp-fb:98 nack pli\r\n" +
-    `a=fmtp:98 ${fmtp}\r\n` +
-    // Safari should send a second fmtp, Chrome expects it:
-    `a=fmtp:98 ${fmtp}\r\n`;
-
-  return sdp.replace(h264Regex, fullBlock);
-}
-
 
 type SendSignal = (payload: {
   type: string;
@@ -417,11 +402,12 @@ export function usePeerConnection({
       }
     });
 
-    forceBaselineH264(pc);
-    const offer = await pc.createOffer({
+    let offer = await pc.createOffer({
       offerToReceiveAudio: true,
       offerToReceiveVideo: true,
     });
+
+    offer = forceVp8ForOffer(offer);
 
     await pc.setLocalDescription(offer);
     if (DEBUG_CALLS) {
@@ -434,15 +420,10 @@ export function usePeerConnection({
   const acceptOffer = useCallback(async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
     const pc = await ensurePeerConnection(targetUserId);
 
-    const patched = {
-      type: offer.type,
-      sdp: patchSafariOfferForChrome(offer.sdp!)
-    };
-
     if (DEBUG_CALLS) {
-      console.log("REMOTE OFFER SDP (PATCHED):\n", patched);
+      console.log("REMOTE OFFER SDP (PATCHED):\n", offer);
     }
-    await pc.setRemoteDescription(patched);
+    await pc.setRemoteDescription(offer);
 
     const stream = await obtainLocalStream();
     stream.getTracks().forEach(track => {
@@ -454,7 +435,6 @@ export function usePeerConnection({
       }
     });
 
-    forceBaselineH264(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
