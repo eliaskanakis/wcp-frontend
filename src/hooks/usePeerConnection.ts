@@ -208,9 +208,8 @@ export function usePeerConnection({
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
-  const sessionIdRef = useRef<string>(() =>
-    Math.random().toString(36).slice(2, 10)
-  );
+  const sessionIdRef = useRef<string>(Math.random().toString(36).slice(2, 10));
+
   const targetUserIdRef = useRef<string | null>(null);
 
   const [state, setState] = useState<PeerConnectionState>({
@@ -238,7 +237,6 @@ export function usePeerConnection({
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
         ],
-        sdpSemantics: "unified-plan",
       });
 
       peerRef.current = pc;
