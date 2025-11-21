@@ -7,28 +7,35 @@ function forceVp8ForOffer(offer: RTCSessionDescriptionInit) {
 
   console.log("⚠️ Forcing VP8 for cross-device compatibility");
 
-  // Remove all H264 m-lines
-  offer.sdp = offer.sdp.replace(/m=video.*\r\n/g, (line) => {
-    return line.replace(/(96|97|98|99|100|101|102|119|120)/g, "120");
-  });
+  let sdp = offer.sdp;
 
-  // Remove all H264 codec descriptions entirely
-  offer.sdp = offer.sdp.replace(/a=rtpmap:\d+ H264\/90000\r\n/g, "");
-  offer.sdp = offer.sdp.replace(/a=fmtp:\d+ .*\r\n/g, "");
+  // 1. Remove all H264 codec lines
+  sdp = sdp.replace(/a=rtpmap:\d+ H264\/90000\r?\n/g, "");
+  sdp = sdp.replace(/a=fmtp:\d+ .*H264.*\r?\n/g, "");
+  sdp = sdp.replace(/a=rtcp-fb:\d+ .*ccm fir\r?\n/g, "");
+  sdp = sdp.replace(/a=rtcp-fb:\d+ .*nack pli\r?\n/g, "");
+  sdp = sdp.replace(/a=rtcp-fb:\d+ .*goog-remb\r?\n/g, "");
 
-  // Add VP8 line if missing
-  if (!offer.sdp.includes("VP8/90000")) {
-    offer.sdp = offer.sdp.replace(
-      /m=video .*?\r\n/,
-      `m=video 9 UDP/TLS/RTP/SAVPF 120\r\n`
-    );
+  // 2. Edit the "m=video" payload list to keep only VP8's PT (typically 96)
+  sdp = sdp.replace(
+    /m=video\s+\d+\s+UDP\/TLS\/RTP\/SAVPF\s+([0-9 ]+)/,
+    (m, payloads) => {
+      const list = payloads.split(" ");
+      const vp8 = list.find((pt) => pt === "96" || pt === "98" || pt === "100");
+      return `m=video 9 UDP/TLS/RTP/SAVPF ${vp8 ?? "96"}`;
+    }
+  );
 
-    offer.sdp +=
-      "a=rtpmap:120 VP8/90000\r\n" +
-      "a=rtcp-fb:120 nack pli\r\n" +
-      "a=rtcp-fb:120 ccm fir\r\n";
+  // 3. Ensure VP8 is present in rtpmap (Chrome requires it)
+  if (!/VP8\/90000/.test(sdp)) {
+    sdp +=
+      "a=rtpmap:96 VP8/90000\r\n" +
+      "a=rtcp-fb:96 nack\r\n" +
+      "a=rtcp-fb:96 nack pli\r\n" +
+      "a=rtcp-fb:96 ccm fir\r\n";
   }
 
+  offer.sdp = sdp;
   return offer;
 }
 
