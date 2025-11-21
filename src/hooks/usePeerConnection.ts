@@ -41,7 +41,6 @@ const DEBUG_CALLS =
   process.env.NEXT_PUBLIC_CALL_DEBUG === "true";
 
 const createSessionId = () => Math.random().toString(36).slice(2, 10);
-const sessionIdRef = { current: Math.random().toString(36).slice(2, 10) };
 
 export function usePeerConnection({
   channelId,
@@ -95,6 +94,16 @@ export function usePeerConnection({
           targetUserId: targetUserIdRef.current,
         });
       }
+
+      (["audio", "video"] as const).forEach((kind) => {
+        try {
+          pc.addTransceiver(kind, { direction: "sendrecv" });
+        } catch (error) {
+          if (DEBUG_CALLS) {
+            console.warn("Failed to add transceiver", kind, error);
+          }
+        }
+      });
 
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
@@ -243,14 +252,22 @@ export function usePeerConnection({
   const addLocalTracks = useCallback(
     async (pc: RTCPeerConnection) => {
       const stream = await obtainLocalStream();
-      const senders = pc.getSenders();
+      const transceivers = pc.getTransceivers();
       stream.getTracks().forEach((track) => {
-        const alreadySending = senders.some(
-          (sender) => sender.track && sender.track.kind === track.kind
+        const match = transceivers.find(
+          (transceiver) =>
+            transceiver.sender.track?.kind === track.kind ||
+            (!transceiver.sender.track &&
+              transceiver.receiver.track?.kind === track.kind)
         );
-        if (!alreadySending) {
-          pc.addTrack(track, stream);
+
+        if (match?.sender) {
+          match.direction = "sendrecv";
+          void match.sender.replaceTrack(track);
+          return;
         }
+
+        pc.addTrack(track, stream);
       });
     },
     [obtainLocalStream]
@@ -259,12 +276,27 @@ export function usePeerConnection({
   const createOffer = useCallback(
     async (targetUserId: string) => {
       const pc = await ensurePeerConnection(targetUserId);
-      await addLocalTracks(pc);
+      const stream = await obtainLocalStream();
+
+      stream.getTracks().forEach((track) => {
+        const senderExists = pc
+          .getSenders()
+          .some((sender) => sender.track?.kind === track.kind);
+        if (!senderExists) {
+          pc.addTrack(track, stream);
+        }
+      });
+
+      if (pc.getTransceivers().length === 0) {
+        pc.addTransceiver("video", { direction: "sendrecv" });
+        pc.addTransceiver("audio", { direction: "sendrecv" });
+      }
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       return offer;
     },
-    [addLocalTracks, ensurePeerConnection]
+    [ensurePeerConnection, obtainLocalStream]
   );
 
   const acceptOffer = useCallback(
