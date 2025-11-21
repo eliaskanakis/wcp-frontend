@@ -147,75 +147,99 @@ export function usePeerConnection({
       pc.ontrack = (event) => {
         if (DEBUG_CALLS) {
           console.log("[RTC] ontrack", {
-            track: event.track.kind,
-            muted: event.track.muted,
-            streams: event.streams?.length ?? 0,
+            kind: event.track.kind,
             id: event.track.id,
+            muted: event.track.muted,
+            streamIds: event.streams.map((s) => s.id),
           });
         }
 
-        // 1. Ensure stable remote stream
+        // ----------------------------------------------------------
+        // CASE 1 — SAFARI / ANDROID: event.streams[0] MUST BE USED
+        // ----------------------------------------------------------
+        if (event.streams && event.streams[0]) {
+          const incomingStream = event.streams[0];
+
+          // If this stream is new OR if video arrived → bind it
+          if (
+            !remoteStreamRef.current ||
+            event.track.kind === "video" // ensure video binds even if audio came first
+          ) {
+            remoteStreamRef.current = incomingStream;
+            setState((prev) => ({
+              ...prev,
+              remoteStream: incomingStream,
+            }));
+          }
+
+          // Handle Safari muted video problem
+          if (event.track.kind === "video") {
+            if (event.track.muted) {
+              console.log("[RTC] video muted → requesting keyframe");
+
+              const receiver = pc
+                .getReceivers()
+                .find((r) => r.track?.kind === "video");
+
+              try {
+                (receiver as any)?.requestKeyFrame?.();
+              } catch (_) { }
+
+              event.track.onunmute = () => {
+                event.track.onunmute = null;
+                console.log("[RTC] video track unmuted!");
+                setState((prev) => ({
+                  ...prev,
+                  remoteStream: incomingStream,
+                }));
+              };
+            }
+          }
+
+          return; // 🚀 IMPORTANT: do NOT fall into fallback logic
+        }
+
+        // ----------------------------------------------------------
+        // CASE 2 — CHROME DESKTOP: no event.streams → manual merge
+        // ----------------------------------------------------------
         if (!remoteStreamRef.current) {
           remoteStreamRef.current = new MediaStream();
           setState((prev) => ({
             ...prev,
-            remoteStream: remoteStreamRef.current,
+            remoteStream: remoteStreamRef.current!,
           }));
         }
 
-        const remoteStream = remoteStreamRef.current;
+        const compositeStream = remoteStreamRef.current;
 
-        // 2. Add track if not present
-        const already = remoteStream.getTracks().some((t) => t.id === event.track.id);
-        if (!already) {
-          remoteStream.addTrack(event.track);
-
-          if (DEBUG_CALLS) {
-            console.log("[RTC] remote stream updated", {
-              id: remoteStream.id,
-              tracks: remoteStream.getTracks().map((t) => ({
-                kind: t.kind,
-                id: t.id,
-                muted: t.muted,
-                readyState: t.readyState,
-              })),
-            });
-          }
+        // Avoid duplicates
+        if (!compositeStream.getTracks().some((t) => t.id === event.track.id)) {
+          compositeStream.addTrack(event.track);
         }
 
-        // -------------------------------
-        // SAFARI → LAPTOP VIDEO UNMUTE FIX
-        // -------------------------------
-        if (event.track.kind === "video") {
-          // If track is muted, Safari hasn’t sent a keyframe yet
-          if (event.track.muted) {
-            console.log("[RTC] video track muted, requesting keyframe…");
+        if (event.track.kind === "video" && event.track.muted) {
+          console.log("[RTC] video muted → requesting keyframe (fallback)");
 
-            const receiver = pc
-              .getReceivers()
-              .find((r) => r.track?.kind === "video");
+          const receiver = pc
+            .getReceivers()
+            .find((r) => r.track?.kind === "video");
 
-            try {
-              (receiver as any)?.requestKeyFrame?.();
-            } catch (e) {
-              console.warn("[RTC] keyframe request not supported", e);
-            }
+          try {
+            (receiver as any)?.requestKeyFrame?.();
+          } catch (_) { }
 
-            // When Safari unmutes → trigger UI update
-            event.track.onunmute = () => {
-              event.track.onunmute = null;
-              console.log("[RTC] video track unmuted!");
-
-              // Force CallPanel to try play again
-              setState((prev) => ({
-                ...prev,
-                remoteStream: remoteStream,
-              }));
-            };
-          }
+          event.track.onunmute = () => {
+            event.track.onunmute = null;
+            console.log("[RTC] video track unmuted!");
+            setState((prev) => ({ ...prev, remoteStream: compositeStream }));
+          };
         }
+
+        setState((prev) => ({
+          ...prev,
+          remoteStream: compositeStream,
+        }));
       };
-
 
       pc.onconnectionstatechange = () => {
         if (DEBUG_CALLS) {
