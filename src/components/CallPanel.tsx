@@ -10,7 +10,7 @@ type CallPanelProps = {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   isSelfMuted: boolean;
-  isRemoteMuted: boolean;     // ← mutes the AUDIO TRACK, not the video element
+  isRemoteMuted: boolean;   // audio mute ONLY (not video element mute)
   onToggleSelfMute: () => void;
   onToggleRemoteMute: () => void;
   onEndCall: () => void;
@@ -30,96 +30,94 @@ export function CallPanel({
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  /* ------------------------------------------------------------------
+  /* ----------------------------------------------------------
      LOCAL VIDEO BINDING
-  ------------------------------------------------------------------ */
+  ---------------------------------------------------------- */
   useEffect(() => {
-    const video = localVideoRef.current;
-    if (!video) return;
+    const vid = localVideoRef.current;
+    if (!vid) return;
 
     if (!localStream) {
-      video.srcObject = null;
-      video.pause();
+      vid.srcObject = null;
+      vid.pause();
       return;
     }
 
-    if (video.srcObject !== localStream) {
-      video.srcObject = localStream;
+    if (vid.srcObject !== localStream) {
+      vid.srcObject = localStream;
     }
 
-    const play = () => {
-      video.play().catch(() => {});
+    const tryPlay = () => {
+      vid.play().catch(() => {});
     };
 
-    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      play();
+    if (vid.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      tryPlay();
     } else {
-      video.onloadedmetadata = play;
+      vid.onloadedmetadata = tryPlay;
     }
   }, [localStream]);
 
-  /* ------------------------------------------------------------------
-     REMOTE VIDEO — THE IMPORTANT PART
-  ------------------------------------------------------------------ */
+  /* ----------------------------------------------------------
+     REMOTE VIDEO BINDING (very important)
+  ---------------------------------------------------------- */
   useEffect(() => {
-    const video = remoteVideoRef.current;
-    if (!video) return;
+    const vid = remoteVideoRef.current;
+    if (!vid) return;
 
     if (!remoteStream) {
-      video.srcObject = null;
-      video.pause();
+      vid.srcObject = null;
+      vid.pause();
       return;
     }
 
-    // Attach stream only if changed
-    if (video.srcObject !== remoteStream) {
+    // Bind only if the stream instance changed
+    if (vid.srcObject !== remoteStream) {
       if (DEBUG_CALLS) console.log("🟦 Binding remote stream");
-      video.srcObject = remoteStream;
+      vid.srcObject = remoteStream;
 
-      // Try immediate playback (may fail due to autoplay)
-      video.play().catch(() => {});
+      // Immediate attempt
+      vid.play().catch(() => {});
     }
 
-    // A function that retries playback once metadata or first frame is ready
+    // Safari sometimes fires only loadeddata
     const tryPlay = () => {
-      video
+      vid
         .play()
         .then(() => {
           if (DEBUG_CALLS) console.log("🟩 remote video playing");
         })
         .catch((err) => {
-          if (DEBUG_CALLS) console.warn("🟥 remote video later play() failed", err);
+          if (DEBUG_CALLS) console.warn("🟥 remote video play() failed", err);
         });
     };
 
-    // Chrome desktop sometimes only fires loadedmetadata
-    video.onloadedmetadata = tryPlay;
-
-    // Safari often fires only loadeddata
-    video.onloadeddata = tryPlay;
+    vid.onloadedmetadata = tryPlay;
+    vid.onloadeddata = tryPlay;
 
     return () => {
-      video.onloadedmetadata = null;
-      video.onloadeddata = null;
+      vid.onloadedmetadata = null;
+      vid.onloadeddata = null;
     };
   }, [remoteStream]);
 
-  /* ------------------------------------------------------------------
-     AUDIO TRACK MUTE (NOT THE VIDEO ELEMENT)
-  ------------------------------------------------------------------ */
+  /* ----------------------------------------------------------
+     REMOTE AUDIO MUTE (controls audio track)
+  ---------------------------------------------------------- */
   useEffect(() => {
     if (!remoteStream) return;
     remoteStream.getAudioTracks().forEach((t) => {
-      t.enabled = !isRemoteMuted;    // proper audio mute
+      t.enabled = !isRemoteMuted;
     });
   }, [remoteStream, isRemoteMuted]);
 
-  /* ------------------------------------------------------------------
-     RENDER
-  ------------------------------------------------------------------ */
+  /* ----------------------------------------------------------
+     UI RENDER
+  ---------------------------------------------------------- */
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
       <div className="w-full max-w-4xl rounded-3xl bg-white p-6 shadow-2xl">
+        {/* HEADER */}
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           <button
@@ -130,14 +128,15 @@ export function CallPanel({
           </button>
         </div>
 
+        {/* VIDEO GRID */}
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {/* ------------ REMOTE VIDEO (ALWAYS MUTED) ------------- */}
+          {/* REMOTE */}
           <div className="rounded-2xl bg-slate-900 p-2 text-white">
             <video
               ref={remoteVideoRef}
               autoPlay
               playsInline
-              muted      // always muted for autoplay policy
+              muted   // must be muted for autoplay, audio track is controlled separately
               className="h-60 w-full rounded-xl bg-black object-cover"
             />
             <p className="mt-2 text-center text-xs uppercase tracking-wide text-white/80">
@@ -145,13 +144,13 @@ export function CallPanel({
             </p>
           </div>
 
-          {/* ------------ LOCAL VIDEO ------------- */}
+          {/* LOCAL */}
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-2">
             <video
               ref={localVideoRef}
               autoPlay
               playsInline
-              muted      // always muted
+              muted     // always muted (local echo prevention)
               className="h-60 w-full rounded-xl bg-black object-cover"
             />
             <p className="mt-2 text-center text-xs uppercase tracking-wide text-slate-500">
@@ -160,7 +159,7 @@ export function CallPanel({
           </div>
         </div>
 
-        {/* ------------ CONTROLS ------------- */}
+        {/* CONTROLS */}
         <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm font-semibold">
           <button
             onClick={onToggleSelfMute}
