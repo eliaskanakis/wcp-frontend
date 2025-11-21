@@ -2,6 +2,158 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+function isChromeDesktop(): boolean {
+  if (typeof navigator === "undefined") return false;
+
+  const ua = navigator.userAgent;
+
+  const isChrome =
+    /Chrome/.test(ua) &&
+    !/Edg/.test(ua) &&
+    !/OPR/.test(ua) &&
+    !/CriOS/.test(ua) &&
+    !/Android/.test(ua);
+
+  return isChrome;
+}
+
+export function sanitizeIncomingOffer(sdp: string): string {
+  if (!sdp) return "";
+
+  // Allowed codecs:
+  // 98  → H264 baseline PM1
+  // 102 → H264 baseline PM0
+  const allowedVideoPayloads = new Set(["98", "102"]);
+
+  const allowedH264 = {
+    "98": "profile-level-id=42e01f;packetization-mode=1",
+    "102": "profile-level-id=42e01f;packetization-mode=0",
+  };
+
+  const lines = sdp.split(/\r\n/);
+  const out: string[] = [];
+  let insideVideo = false;
+
+  for (let line of lines) {
+    if (line.startsWith("m=video")) {
+      insideVideo = true;
+
+      const parts = line.split(" ");
+      const header = parts.slice(0, 3).join(" ");
+      const cleaned = Array.from(allowedVideoPayloads).join(" ");
+      out.push(`${header} ${cleaned}`);
+      continue;
+    }
+
+    if (insideVideo) {
+      // a=rtpmap
+      if (line.startsWith("a=rtpmap:")) {
+        const pt = line.match(/a=rtpmap:(\d+)/)?.[1];
+        if (!pt || !allowedVideoPayloads.has(pt)) continue;
+      }
+
+      // a=fmtp
+      if (line.startsWith("a=fmtp:")) {
+        const pt = line.match(/a=fmtp:(\d+)/)?.[1];
+        if (!pt || !allowedVideoPayloads.has(pt)) continue;
+
+        if (pt === "98" || pt === "102") {
+          out.push(`a=fmtp:${pt} ${allowedH264[pt]}`);
+          continue;
+        }
+
+      }
+
+      // a=rtcp-fb
+      if (line.startsWith("a=rtcp-fb:")) {
+        const pt = line.match(/a=rtcp-fb:(\d+)/)?.[1];
+        if (!pt || !allowedVideoPayloads.has(pt)) continue;
+      }
+    }
+
+    // leave video block
+    if (line.startsWith("m=audio")) {
+      insideVideo = false;
+    }
+
+    out.push(line);
+  }
+
+  return out.join("\r\n");
+}
+
+export function sanitizeIncomingOfferForVp8Fallback(
+  sdp: string,
+  isChromeDesktop: boolean
+): string {
+  if (!isChromeDesktop) return sdp;
+
+  const lines = sdp.split(/\r\n/);
+  const out: string[] = [];
+
+  let insideVideo = false;
+
+  // VP8 payload ID in Chrome-offers is typically 106 or 96 depending on device
+  // We will extract it dynamically
+  let vp8Payload: string | null = null;
+
+  // Find VP8 rtpmap lines
+  for (const line of lines) {
+    const m = line.match(/^a=rtpmap:(\d+)\s+VP8\/90000/i);
+    if (m) {
+      vp8Payload = m[1];
+      break;
+    }
+  }
+
+  // If not found → cannot VP8 fallback
+  if (!vp8Payload) return sdp;
+
+  for (let line of lines) {
+    // ------------------------------
+    // Detect m=video line
+    // ------------------------------
+    if (line.startsWith("m=video")) {
+      insideVideo = true;
+
+      // Force VP8 only
+      out.push(`m=video 9 UDP/TLS/RTP/SAVPF ${vp8Payload}`);
+      continue;
+    }
+
+    // ------------------------------
+    // Inside video section
+    // ------------------------------
+    if (insideVideo) {
+      // Keep only VP8
+      if (line.startsWith("a=rtpmap:")) {
+        if (!line.includes(`rtpmap:${vp8Payload}`)) continue;
+      }
+
+      if (line.startsWith("a=rtcp-fb:")) {
+        if (!line.includes(`rtcp-fb:${vp8Payload}`)) continue;
+      }
+
+      if (line.startsWith("a=fmtp:")) {
+        if (!line.includes(`fmtp:${vp8Payload}`)) continue;
+      }
+
+      // Strip RTX / apt
+      if (line.includes("apt=")) continue;
+    }
+
+    // Leave video block at next m=
+    if (line.startsWith("m=audio")) {
+      insideVideo = false;
+    }
+
+    out.push(line);
+  }
+
+  return out.join("\r\n");
+}
+
+
 type SendSignal = (payload: {
   type: string;
   channelId: string;
@@ -397,7 +549,21 @@ export function usePeerConnection({
     if (DEBUG_CALLS) {
       console.log("REMOTE OFFER SDP:\n", offer);
     }
-    await pc.setRemoteDescription(offer);
+
+    const safeOffer: RTCSessionDescriptionInit = {
+      type: offer.type,
+      sdp: sanitizeIncomingOfferForVp8Fallback(
+        offer.sdp ?? "",
+        isChromeDesktop()
+      ),
+
+    };
+
+    if (DEBUG_CALLS) {
+      console.log("[RTC] incoming-offer-sanitized:\n", safeOffer.sdp);
+    }
+
+    await pc.setRemoteDescription(safeOffer);
 
     const stream = await obtainLocalStream();
     stream.getTracks().forEach(track => {
