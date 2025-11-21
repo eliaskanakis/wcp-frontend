@@ -160,6 +160,7 @@ export default function ChannelChatPage({
     },
   });
 
+
   const clearIncomingTimer = () => {
     if (incomingTimerRef.current) {
       clearTimeout(incomingTimerRef.current);
@@ -181,6 +182,32 @@ export default function ChannelChatPage({
     setOutgoingCall(null);
     setActiveCall(null);
     endPeerConnection();
+  }, [endPeerConnection]);
+
+  const handleAnswerRef = useRef(handleAnswer);
+  const handleRemoteIceRef = useRef(handleRemoteIce);
+  const pushSystemMessageRef = useRef(pushSystemMessage);
+  const resetCallStateRef = useRef(resetCallState);
+  const endPeerConnectionRef = useRef(endPeerConnection);
+
+  useEffect(() => {
+    handleAnswerRef.current = handleAnswer;
+  }, [handleAnswer]);
+
+  useEffect(() => {
+    handleRemoteIceRef.current = handleRemoteIce;
+  }, [handleRemoteIce]);
+
+  useEffect(() => {
+    pushSystemMessageRef.current = pushSystemMessage;
+  }, [pushSystemMessage]);
+
+  useEffect(() => {
+    resetCallStateRef.current = resetCallState;
+  }, [resetCallState]);
+
+  useEffect(() => {
+    endPeerConnectionRef.current = endPeerConnection;
   }, [endPeerConnection]);
 
   useEffect(() => {
@@ -211,10 +238,13 @@ export default function ChannelChatPage({
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "system") {
-          pushSystemMessage(msg.text);
+          pushSystemMessageRef.current?.(msg.text);
         } else if (msg.type === "error") {
           setStatus("error");
-          pushSystemMessage(msg.text ?? "Unknown error", true);
+          pushSystemMessageRef.current?.(
+            msg.text ?? "Unknown error",
+            true,
+          );
         } else if (msg.type === "chat") {
           setMessages((prev) => [
             ...prev,
@@ -269,15 +299,17 @@ export default function ChannelChatPage({
             prev.filter((user) => user.userId !== msg.userId)
           );
         } else if (msg.type === "webrtc-ice" && msg.ice) {
-          await handleRemoteIce(msg.ice);
+          await handleRemoteIceRef.current?.(msg.ice);
         } else if (msg.type === "webrtc-answer" && msg.sdp) {
-          await handleAnswer(msg.sdp);
+          await handleAnswerRef.current?.(msg.sdp);
           clearOutgoingTimer();
           setActiveCall(
             (prev) => prev ?? { userId: msg.userId, username: msg.from }
           );
           setOutgoingCall(null);
-          pushSystemMessage(`Connected with ${msg.from}.`);
+          pushSystemMessageRef.current?.(
+            `Connected with ${msg.from}.`,
+          );
         } else if (msg.type === "webrtc-offer" && msg.sdp) {
           if (msg.targetUserId && msg.targetUserId !== currentUserId) {
             return;
@@ -289,7 +321,9 @@ export default function ChannelChatPage({
             fromName: callerName,
             sdp: msg.sdp,
           });
-          pushSystemMessage(`${callerName} is calling you...`);
+          pushSystemMessageRef.current?.(
+            `${callerName} is calling you...`,
+          );
           clearIncomingTimer();
           incomingTimerRef.current = setTimeout(() => {
             sendSocketPayload({
@@ -301,40 +335,43 @@ export default function ChannelChatPage({
               targetUserId: callerId,
               reason: "timeout",
             });
-            pushSystemMessage(`Missed call from ${callerName}.`, true);
+            pushSystemMessageRef.current?.(
+              `Missed call from ${callerName}.`,
+              true,
+            );
             setIncomingCall((current) =>
               current && current.fromUserId === callerId ? null : current
             );
-            endPeerConnection();
+            endPeerConnectionRef.current?.();
           }, 15000);
         } else if (msg.type === "call-cancelled") {
-          pushSystemMessage(`${msg.from} cancelled the call.`);
-          resetCallState();
+          pushSystemMessageRef.current?.(
+            `${msg.from} cancelled the call.`,
+          );
+          resetCallStateRef.current?.();
         } else if (msg.type === "call-rejected") {
-          pushSystemMessage(`${msg.from} rejected the call.`);
-          resetCallState();
+          pushSystemMessageRef.current?.(
+            `${msg.from} rejected the call.`,
+          );
+          resetCallStateRef.current?.();
         } else if (msg.type === "call-ended") {
-          pushSystemMessage(`${msg.from} ended the call.`);
-          resetCallState();
+          pushSystemMessageRef.current?.(
+            `${msg.from} ended the call.`,
+          );
+          resetCallStateRef.current?.();
         }
       } catch (error) {
         console.error("Invalid websocket payload", error);
       }
     };
     return () => {
-      console.log(senderName+" disconnected due to dismount");
+      endPeerConnectionRef.current?.();
       ws.close();
     };
   }, [
     canView,
     channelId,
     currentUserId,
-    endPeerConnection,
-    handleAnswer,
-    handleRemoteIce,
-    incomingCall,
-    pushSystemMessage,
-    resetCallState,
     sendSocketPayload,
     senderName,
   ]);

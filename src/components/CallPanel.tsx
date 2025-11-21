@@ -29,6 +29,7 @@ export function CallPanel({
 }: CallPanelProps) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previousRemoteIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -64,28 +65,33 @@ export function CallPanel({
     if (!remoteStream) {
       video.srcObject = null;
       video.pause();
+      previousRemoteIdRef.current = null;
       return;
     }
 
-    video.srcObject = null;
-    const cloned = new MediaStream();
-    remoteStream.getVideoTracks().forEach((track) => {
-      cloned.addTrack(track);
-    });
-    remoteStream.getAudioTracks().forEach((track) => {
-      cloned.addTrack(track);
-    });
-    video.srcObject = cloned;
-    if (DEBUG_CALLS) {
-      console.log("[RTC] call-panel remote stream", {
-        id: cloned.id,
-        tracks: cloned.getTracks().map((track) => ({
-          kind: track.kind,
-          readyState: track.readyState,
-          enabled: track.enabled,
-        })),
-      });
+    const isSameStream =
+      previousRemoteIdRef.current &&
+      previousRemoteIdRef.current === remoteStream.id;
+
+    if (!isSameStream) {
+      const cloned = new MediaStream();
+      remoteStream.getVideoTracks().forEach((track) => cloned.addTrack(track));
+      remoteStream.getAudioTracks().forEach((track) => cloned.addTrack(track));
+      video.srcObject = cloned;
+      previousRemoteIdRef.current = remoteStream.id;
+      if (DEBUG_CALLS) {
+        console.log("[RTC] call-panel remote stream", {
+          id: cloned.id,
+          sourceId: remoteStream.id,
+          tracks: cloned.getTracks().map((track) => ({
+            kind: track.kind,
+            readyState: track.readyState,
+            enabled: track.enabled,
+          })),
+        });
+      }
     }
+
     const attemptPlay = () => {
       const playPromise = video.play();
       if (playPromise && typeof playPromise.catch === "function") {
@@ -94,7 +100,6 @@ export function CallPanel({
             error.name === "NotAllowedError" ||
             error.name === "NotSupportedError"
           ) {
-            console.warn("Retrying remote video play due to:", error.name);
             setTimeout(attemptPlay, 500);
             return;
           }
@@ -109,12 +114,18 @@ export function CallPanel({
         });
       }
     };
+
     const handleLoaded = () => {
       video.removeEventListener("loadedmetadata", handleLoaded);
       attemptPlay();
     };
+
     video.addEventListener("loadedmetadata", handleLoaded);
-    attemptPlay();
+
+    if (video.srcObject instanceof MediaStream) {
+      attemptPlay();
+    }
+
     return () => {
       video.removeEventListener("loadedmetadata", handleLoaded);
     };

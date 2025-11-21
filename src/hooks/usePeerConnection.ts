@@ -36,6 +36,13 @@ export type PeerConnectionState = {
   iceState: RTCIceConnectionState;
 };
 
+const DEBUG_CALLS =
+  typeof process !== "undefined" &&
+  process.env.NEXT_PUBLIC_CALL_DEBUG === "true";
+
+const createSessionId = () => Math.random().toString(36).slice(2, 10);
+const sessionIdRef = { current: Math.random().toString(36).slice(2, 10) };
+
 export function usePeerConnection({
   channelId,
   currentName,
@@ -47,6 +54,7 @@ export function usePeerConnection({
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const targetUserIdRef = useRef<string | null>(null);
+  const sessionIdRef = useRef<string>(createSessionId());
 
   const [state, setState] = useState<PeerConnectionState>({
     localStream: null,
@@ -62,17 +70,37 @@ export function usePeerConnection({
       if (targetUserId) {
         targetUserIdRef.current = targetUserId;
       }
-      if (peerRef.current) return peerRef.current;
+      if (peerRef.current) {
+        if (DEBUG_CALLS) {
+          console.log("[RTC] pc-reuse", {
+            sessionId: sessionIdRef.current,
+            signalingState: peerRef.current.signalingState,
+            connectionState: peerRef.current.connectionState,
+            iceState: peerRef.current.iceConnectionState,
+          });
+        }
+        return peerRef.current;
+      }
 
+      sessionIdRef.current = createSessionId();
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
         ],
       });
+      if (DEBUG_CALLS) {
+        console.log("[RTC] pc-created", {
+          sessionId: sessionIdRef.current,
+          targetUserId: targetUserIdRef.current,
+        });
+      }
 
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
+        if (DEBUG_CALLS) {
+          console.log("[RTC] local-ice", event.candidate);
+        }
         onPeerEvent?.("local-ice", JSON.stringify(event.candidate));
         sendSignal({
           type: "webrtc-ice",
@@ -86,6 +114,13 @@ export function usePeerConnection({
       };
 
       pc.ontrack = (event) => {
+        if (DEBUG_CALLS) {
+          console.log("[RTC] ontrack", {
+            track: event.track.kind,
+            muted: event.track.muted,
+            streams: event.streams?.length ?? 0,
+          });
+        }
         const assignStream = (stream: MediaStream) => {
           remoteStreamRef.current = stream;
           setState((prev) => ({ ...prev, remoteStream: stream }));
@@ -119,11 +154,35 @@ export function usePeerConnection({
       };
 
       pc.onconnectionstatechange = () => {
+        if (DEBUG_CALLS) {
+          console.log("[RTC] connection-state", pc.connectionState);
+          if (pc.connectionState === "connected") {
+            pc.getReceivers()
+              .filter((receiver) => receiver.track?.kind === "video")
+              .forEach((receiver) => {
+                receiver
+                  .getStats()
+                  .then((stats) => {
+                    stats.forEach((report) => {
+                      if (report.type === "inbound-rtp" && report.kind === "video") {
+                        console.log("[RTC] inbound-video", report);
+                      }
+                    });
+                  })
+                  .catch((err) => {
+                    console.warn("Failed to get receiver stats", err);
+                  });
+              });
+          }
+        }
         onPeerEvent?.("connection-state", pc.connectionState);
         setState((prev) => ({ ...prev, connectionState: pc.connectionState }));
       };
 
       pc.oniceconnectionstatechange = () => {
+        if (DEBUG_CALLS) {
+          console.log("[RTC] ice-state", pc.iceConnectionState);
+        }
         onPeerEvent?.("ice-state", pc.iceConnectionState);
         setState((prev) => ({ ...prev, iceState: pc.iceConnectionState }));
       };
