@@ -261,19 +261,36 @@ export function usePeerConnection({
           remoteStreamRef.current = stream;
           setState((prev) => ({ ...prev, remoteStream: stream }));
 
-          if (event.track.kind === "video" && event.track.muted) {
-            const receiver = pc
-              .getReceivers()
-              .find((r) => r.track?.kind === "video");
-            try {
-              (receiver as any)?.requestKeyFrame?.();
-            } catch {}
-            event.track.onunmute = () => {
-              event.track.onunmute = null;
-              remoteStreamRef.current = stream;
-              setState((prev) => ({ ...prev, remoteStream: stream }));
+          if (event.track.kind === "video") {
+
+            const receiver = pc.getReceivers().find(r => r.track?.kind === "video") as any;
+
+            const forceKF = () => {
+              try {
+                receiver?.requestKeyFrame?.();
+                console.log("[RTC] → keyframe requested");
+              } catch (_) { }
             };
+
+            // ALWAYS request at least one immediately
+            forceKF();
+
+            // Safari often unmutes after 100–300ms
+            if (event.track.muted) {
+              console.log("[RTC] video muted — scheduling retry keyframes");
+
+              setTimeout(forceKF, 200);
+              setTimeout(forceKF, 600);
+              setTimeout(forceKF, 1300);
+
+              event.track.onunmute = () => {
+                console.log("[RTC] video track UNMUTED → final keyframe push");
+                event.track.onunmute = null;
+                forceKF();
+              };
+            }
           }
+
 
           return;
         }
@@ -362,6 +379,7 @@ export function usePeerConnection({
         if (!exists) pc.addTrack(t, stream);
       });
 
+
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
@@ -384,11 +402,42 @@ export function usePeerConnection({
 
       await pc.setRemoteDescription(sanitized);
 
+      // SAFARI → CHROME FIX: missing keyframe on first video packet
+      function forceKeyFrame() {
+        const receivers = pc.getReceivers().filter(r => r.track?.kind === "video");
+        receivers.forEach(r => {
+          try {
+            (r as any)?.requestKeyFrame?.();
+            console.log("[RTC] forced KEYFRAME");
+          } catch (_) { }
+        });
+      }
+
+      // Triple retry — Safari sometimes ignores early calls
+      setTimeout(forceKeyFrame, 150);   // after remote description
+      setTimeout(forceKeyFrame, 600);   // after ICE starts
+      setTimeout(forceKeyFrame, 1400);  // after candidate pair locks
+
+
       const stream = await obtainLocalStream();
       stream.getTracks().forEach((t) => {
         const exists = pc.getSenders().some((s) => s.track === t);
         if (!exists) pc.addTrack(t, stream);
       });
+
+      // Safari camera encoder wake-up
+      try {
+        const vTrack = stream.getVideoTracks()[0];
+        if (vTrack) {
+          await vTrack.applyConstraints({
+            width: 640,
+            height: 480,
+            frameRate: { ideal: 30, max: 30 }
+          });
+        }
+      } catch (err) {
+        console.warn("[RTC] Safari encoder warmup failed", err);
+      }
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
