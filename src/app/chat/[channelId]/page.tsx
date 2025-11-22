@@ -114,6 +114,28 @@ export default function ChannelChatPage({
     socket.send(JSON.stringify(payload));
   }, []);
 
+  const ensureAuthToken = useCallback(async () => {
+    if (!auth.currentUser) return null;
+    return auth.currentUser.getIdToken();
+  }, []);
+
+  const sendCallSignal = useCallback(
+    (
+      type: OutboundMessageType,
+      overrides: Partial<OutboundMessage> = {}
+    ) => {
+      sendSocketPayload({
+        type,
+        channelId,
+        from: senderName,
+        firebaseUserIdToken: null,
+        text: null,
+        ...overrides,
+      } as OutboundMessage);
+    },
+    [channelId, sendSocketPayload, senderName]
+  );
+
   const signalSender = useCallback(
     (payload: {
       type: string;
@@ -125,18 +147,15 @@ export default function ChannelChatPage({
       sdp?: RTCSessionDescriptionInit;
       ice?: RTCIceCandidateInit;
     }) => {
-      sendSocketPayload({
-        type: payload.type as OutboundMessageType,
-        channelId: payload.channelId,
-        from: payload.from,
+      sendCallSignal(payload.type as OutboundMessageType, {
+        targetUserId: payload.targetUserId,
         firebaseUserIdToken: payload.firebaseUserIdToken,
         text: payload.text ?? null,
-        targetUserId: payload.targetUserId,
         sdp: payload.sdp,
         ice: payload.ice,
       });
     },
-    [sendSocketPayload]
+    [sendCallSignal]
   );
 
   const {
@@ -461,29 +480,17 @@ export default function ChannelChatPage({
       }
       try {
         const offer = await createOffer(targetUserId);
-        let token: string | null = null;
-        if (auth.currentUser) {
-          token = await auth.currentUser.getIdToken();
-        }
+        const token = await ensureAuthToken();
         setOutgoingCall({ userId: targetUserId, username: targetName });
-        sendSocketPayload({
-          type: "webrtc-offer",
-          channelId,
-          from: senderName,
-          firebaseUserIdToken: token,
-          text: null,
+        sendCallSignal("webrtc-offer", {
           targetUserId,
           sdp: offer,
+          firebaseUserIdToken: token,
         });
         pushSystemMessage(`Calling ${targetName}...`);
         clearOutgoingTimer();
         outgoingTimerRef.current = setTimeout(() => {
-          sendSocketPayload({
-            type: "call-cancelled",
-            channelId,
-            from: senderName,
-            firebaseUserIdToken: null,
-            text: null,
+          sendCallSignal("call-cancelled", {
             targetUserId,
             reason: "timeout",
           });
@@ -500,24 +507,18 @@ export default function ChannelChatPage({
     },
     [
       activeCall,
-      channelId,
       createOffer,
+      ensureAuthToken,
       endPeerConnection,
       outgoingCall,
       pushSystemMessage,
-      sendSocketPayload,
-      senderName,
+      sendCallSignal,
     ]
   );
 
   const cancelOutgoingCall = useCallback(() => {
     if (!outgoingCall) return;
-    sendSocketPayload({
-      type: "call-cancelled",
-      channelId,
-      from: senderName,
-      firebaseUserIdToken: null,
-      text: null,
+    sendCallSignal("call-cancelled", {
       targetUserId: outgoingCall.userId,
       reason: "cancelled",
     });
@@ -526,12 +527,10 @@ export default function ChannelChatPage({
     setOutgoingCall(null);
     endPeerConnection();
   }, [
-    channelId,
     endPeerConnection,
     outgoingCall,
     pushSystemMessage,
-    sendSocketPayload,
-    senderName,
+    sendCallSignal,
   ]);
 
   const acceptIncomingCall = useCallback(async () => {
@@ -542,18 +541,11 @@ export default function ChannelChatPage({
         incomingCall.sdp,
         incomingCall.fromUserId
       );
-      let token: string | null = null;
-      if (auth.currentUser) {
-        token = await auth.currentUser.getIdToken();
-      }
-      sendSocketPayload({
-        type: "webrtc-answer",
-        channelId,
-        from: senderName,
-        firebaseUserIdToken: token,
-        text: null,
+      const token = await ensureAuthToken();
+      sendCallSignal("webrtc-answer", {
         targetUserId: incomingCall.fromUserId,
         sdp: answer,
+        firebaseUserIdToken: token,
       });
       setActiveCall({
         userId: incomingCall.fromUserId,
@@ -568,22 +560,16 @@ export default function ChannelChatPage({
     }
   }, [
     acceptOffer,
-    channelId,
+    ensureAuthToken,
     incomingCall,
     pushSystemMessage,
-    sendSocketPayload,
-    senderName,
+    sendCallSignal,
   ]);
 
   const rejectIncomingCall = useCallback(
     (reason = "rejected") => {
       if (!incomingCall) return;
-      sendSocketPayload({
-        type: "call-rejected",
-        channelId,
-        from: senderName,
-        firebaseUserIdToken: null,
-        text: null,
+      sendCallSignal("call-rejected", {
         targetUserId: incomingCall.fromUserId,
         reason,
       });
@@ -593,34 +579,23 @@ export default function ChannelChatPage({
       endPeerConnection();
     },
     [
-      channelId,
       endPeerConnection,
       incomingCall,
       pushSystemMessage,
-      sendSocketPayload,
-      senderName,
+      sendCallSignal,
     ]
   );
 
   const endActiveCall = useCallback(() => {
     if (!activeCall) return;
-    sendSocketPayload({
-      type: "call-ended",
-      channelId,
-      from: senderName,
-      firebaseUserIdToken: null,
-      text: null,
-      targetUserId: activeCall.userId,
-    });
+    sendCallSignal("call-ended", { targetUserId: activeCall.userId });
     pushSystemMessage(`Ended call with ${activeCall.username}.`);
     resetCallState();
   }, [
     activeCall,
-    channelId,
     pushSystemMessage,
     resetCallState,
-    sendSocketPayload,
-    senderName,
+    sendCallSignal,
   ]);
 
   useEffect(() => {

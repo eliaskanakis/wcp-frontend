@@ -340,26 +340,33 @@ type RTCRtpCodecCapability = CodecPreference;
     }
   }, []);
 
+  const syncSendersWithStream = useCallback(
+    (pc: RTCPeerConnection, stream: MediaStream) => {
+      const senders = pc.getSenders();
+      stream.getTracks().forEach((track) => {
+        const existing = senders.find((sender) => sender.track?.kind === track.kind);
+        if (existing) {
+          void existing.replaceTrack(track);
+        } else {
+          pc.addTrack(track, stream);
+        }
+      });
+    },
+    []
+  );
+
   const createOffer = useCallback(async (targetUserId: string) => {
     const pc = await ensurePeerConnection(targetUserId);
 
     const stream = await obtainLocalStream();
-    const senders = pc.getSenders();
-    stream.getTracks().forEach((track) => {
-      const existing = senders.find((sender) => sender.track?.kind === track.kind);
-      if (existing) {
-        existing.replaceTrack(track);
-      } else {
-        pc.addTrack(track, stream);
-      }
-    });
+    syncSendersWithStream(pc, stream);
 
-    //enforceH264Codecs(pc);
+    enforceH264Codecs(pc);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
     return offer;
-  }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs]);
+  }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs, syncSendersWithStream]);
 
   
   const acceptOffer = useCallback(async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
@@ -367,24 +374,22 @@ type RTCRtpCodecCapability = CodecPreference;
 
     await pc.setRemoteDescription(offer);
     await flushRemoteCandidates(pc);
-    //enforceH264Codecs(pc);
+    enforceH264Codecs(pc);
 
     const stream = await obtainLocalStream();
-    const senders = pc.getSenders();
-    stream.getTracks().forEach((track) => {
-      const existing = senders.find((sender) => sender.track?.kind === track.kind);
-      if (existing) {
-        existing.replaceTrack(track);
-      } else {
-        pc.addTrack(track, stream);
-      }
-    });
+    syncSendersWithStream(pc, stream);
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
     return answer;
-  }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs, flushRemoteCandidates]);
+  }, [
+    ensurePeerConnection,
+    obtainLocalStream,
+    enforceH264Codecs,
+    flushRemoteCandidates,
+    syncSendersWithStream,
+  ]);
 
 
   

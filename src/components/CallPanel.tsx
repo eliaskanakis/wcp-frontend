@@ -6,6 +6,44 @@ const DEBUG_CALLS =
   typeof process !== "undefined" &&
   process.env.NEXT_PUBLIC_CALL_DEBUG === "true";
 
+type VideoReadyEvent = "loadedmetadata" | "loadeddata";
+
+const updateVideoSource = (
+  video: HTMLVideoElement,
+  stream: MediaStream | null
+) => {
+  if (!stream) {
+    video.srcObject = null;
+    video.pause();
+    return;
+  }
+  if (video.srcObject !== stream) {
+    video.srcObject = stream;
+  }
+};
+
+const whenVideoReady = (
+  video: HTMLVideoElement,
+  events: VideoReadyEvent[],
+  callback: () => void
+) => {
+  if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    callback();
+    return;
+  }
+
+  const handleLoaded = () => {
+    events.forEach((event) => video.removeEventListener(event, handleLoaded));
+    callback();
+  };
+
+  events.forEach((event) => video.addEventListener(event, handleLoaded));
+
+  return () => {
+    events.forEach((event) => video.removeEventListener(event, handleLoaded));
+  };
+};
+
 type CallPanelProps = {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
@@ -36,28 +74,14 @@ export function CallPanel({
     if (!video) return;
 
     if (!localStream) {
-      video.srcObject = null;
-      video.pause();
+      updateVideoSource(video, null);
       return;
     }
 
-    if (video.srcObject !== localStream) {
-      video.srcObject = localStream;
-    }
-
-    const handleLoaded = () => {
-      video.play().catch(() => {});
-    };
-
-    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      handleLoaded();
-      return;
-    }
-
-    video.addEventListener("loadedmetadata", handleLoaded);
-    return () => {
-      video.removeEventListener("loadedmetadata", handleLoaded);
-    };
+    updateVideoSource(video, localStream);
+    return whenVideoReady(video, ["loadedmetadata"], () => {
+      void video.play().catch(() => {});
+    });
   }, [localStream]);
 
   useEffect(() => {
@@ -67,14 +91,13 @@ export function CallPanel({
     video.muted = isRemoteMuted;
 
     if (!remoteStream) {
-      video.srcObject = null;
-      video.pause();
+      updateVideoSource(video, null);
       lastRemoteIdRef.current = null;
       return;
     }
 
     if (lastRemoteIdRef.current !== remoteStream.id) {
-      video.srcObject = remoteStream;
+      updateVideoSource(video, remoteStream);
       lastRemoteIdRef.current = remoteStream.id;
     }
 
@@ -89,24 +112,7 @@ export function CallPanel({
         });
     };
 
-    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      attemptPlay();
-      return;
-    }
-
-    const handleLoaded = () => {
-      video.removeEventListener("loadedmetadata", handleLoaded);
-      video.removeEventListener("loadeddata", handleLoaded);
-      attemptPlay();
-    };
-
-    video.addEventListener("loadedmetadata", handleLoaded);
-    video.addEventListener("loadeddata", handleLoaded);
-
-    return () => {
-      video.removeEventListener("loadedmetadata", handleLoaded);
-      video.removeEventListener("loadeddata", handleLoaded);
-    };
+    return whenVideoReady(video, ["loadedmetadata", "loadeddata"], attemptPlay);
   }, [remoteStream, isRemoteMuted]);
 
   return (
