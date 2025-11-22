@@ -29,6 +29,7 @@ export function CallPanel({
 }: CallPanelProps) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const lastRemoteIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -43,19 +44,21 @@ export function CallPanel({
     if (video.srcObject !== localStream) {
       video.srcObject = localStream;
     }
-    const attemptPlay = () => {
-      void video.play().catch(() => {
-        /* autoplay suppressed */
-      });
-    };
-    if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
-      attemptPlay();
-    } else {
-      video.onloadedmetadata = attemptPlay;
-    }
-  }, [localStream]);
 
-  const lastRemoteIdRef = useRef<string | null>(null);
+    const handleLoaded = () => {
+      video.play().catch(() => {});
+    };
+
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      handleLoaded();
+      return;
+    }
+
+    video.addEventListener("loadedmetadata", handleLoaded);
+    return () => {
+      video.removeEventListener("loadedmetadata", handleLoaded);
+    };
+  }, [localStream]);
 
   useEffect(() => {
     const video = remoteVideoRef.current;
@@ -106,22 +109,6 @@ export function CallPanel({
     };
   }, [remoteStream, isRemoteMuted]);
 
-  return () => {
-      video.removeEventListener("loadedmetadata", handleLoaded);
-      video.removeEventListener("loadeddata", handleLoaded);
-    };
-    return () => {
-      video.removeEventListener("loadedmetadata", handleLoaded);
-      video.removeEventListener("loadeddata", handleLoaded);
-    };
-  }, [remoteStream, isRemoteMuted]);
-
-  return () => {
-      video.onloadedmetadata = null;
-      video.removeEventListener("loadeddata", loadedDataHandler);
-    };
-  }, [remoteStream, isRemoteMuted]);
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
       <div className="w-full max-w-4xl rounded-3xl bg-white p-6 shadow-2xl">
@@ -141,7 +128,6 @@ export function CallPanel({
               autoPlay
               playsInline
               muted={isRemoteMuted}
-              data-remote-video
               className="h-60 w-full rounded-xl bg-black object-cover"
             />
             <p className="mt-2 text-center text-xs uppercase tracking-wide text-white/80">
@@ -164,19 +150,21 @@ export function CallPanel({
         <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm font-semibold">
           <button
             onClick={onToggleSelfMute}
-            className={`rounded-full border px-4 py-1.5 transition ${isSelfMuted
-              ? "border-rose-200 bg-rose-50 text-rose-600"
-              : "border-slate-200 text-slate-700 hover:border-slate-300"
-              }`}
+            className={`rounded-full border px-4 py-1.5 transition ${
+              isSelfMuted
+                ? "border-rose-200 bg-rose-50 text-rose-600"
+                : "border-slate-200 text-slate-700 hover:border-slate-300"
+            }`}
           >
             {isSelfMuted ? "Unmute me" : "Mute me"}
           </button>
           <button
             onClick={onToggleRemoteMute}
-            className={`rounded-full border px-4 py-1.5 transition ${isRemoteMuted
-              ? "border-indigo-200 bg-indigo-50 text-indigo-600"
-              : "border-slate-200 text-slate-700 hover:border-slate-300"
-              }`}
+            className={`rounded-full border px-4 py-1.5 transition ${
+              isRemoteMuted
+                ? "border-indigo-200 bg-indigo-50 text-indigo-600"
+                : "border-slate-200 text-slate-700 hover:border-slate-300"
+            }`}
           >
             {isRemoteMuted ? "Hear remote" : "Silence remote"}
           </button>

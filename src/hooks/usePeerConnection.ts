@@ -151,15 +151,21 @@ export function usePeerConnection({
         }
 
         const assignStream = () => {
-          let stream: MediaStream;
-          if (event.streams && event.streams[0]) {
-            stream = event.streams[0];
-          } else {
-            stream = new MediaStream();
+          const incomingStream = event.streams && event.streams[0];
+          const stream =
+            remoteStreamRef.current ?? incomingStream ?? new MediaStream();
+
+          if (!stream.getTracks().some((track) => track.id === event.track.id)) {
             stream.addTrack(event.track);
           }
-          remoteStreamRef.current = stream;
-          setState((prev) => ({ ...prev, remoteStream: stream }));
+
+          if (remoteStreamRef.current !== stream) {
+            remoteStreamRef.current = stream;
+            setState((prev) =>
+              prev.remoteStream === stream ? prev : { ...prev, remoteStream: stream }
+            );
+          }
+
           onPeerEvent?.("remote-track", event.track.kind);
         };
 
@@ -260,30 +266,6 @@ export function usePeerConnection({
       throw error;
     }
   }, [onError]);
-
-  const addLocalTracks = useCallback(
-    async (pc: RTCPeerConnection) => {
-      const stream = await obtainLocalStream();
-      const transceivers = pc.getTransceivers();
-      stream.getTracks().forEach((track) => {
-        const match = transceivers.find(
-          (transceiver) =>
-            transceiver.sender.track?.kind === track.kind ||
-            (!transceiver.sender.track &&
-              transceiver.receiver.track?.kind === track.kind)
-        );
-
-        if (match?.sender) {
-          match.direction = "sendrecv";
-          void match.sender.replaceTrack(track);
-          return;
-        }
-
-        pc.addTrack(track, stream);
-      });
-    },
-    [obtainLocalStream]
-  );
 
   const createOffer = useCallback(async (targetUserId: string) => {
     const pc = await ensurePeerConnection(targetUserId);
