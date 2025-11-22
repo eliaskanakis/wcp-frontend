@@ -220,6 +220,23 @@ export function usePeerConnection({
     [channelId, currentName, onPeerEvent, sendSignal]
   );
 
+type CodecCapability = {
+  mimeType: string;
+  clockRate?: number;
+  channels?: number;
+  sdpFmtpLine?: string;
+  preferredPayloadType?: number;
+};
+
+type CodecPreference = {
+  mimeType: string;
+  clockRate: number;
+  channels?: number;
+  sdpFmtpLine?: string;
+};
+
+type RTCRtpCodecCapability = CodecPreference;
+
   const obtainLocalStream = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
 
@@ -267,6 +284,67 @@ export function usePeerConnection({
     }
   }, [onError]);
 
+  const enforceH264Codecs = useCallback((pc: RTCPeerConnection) => {
+    if (typeof RTCRtpSender === "undefined" || !RTCRtpSender.getCapabilities) {
+      return;
+    }
+
+    const capabilities = RTCRtpSender.getCapabilities("video");
+    if (!capabilities) return;
+
+    const allowedProfiles = new Set(["42e01f", "42001f", "4d001f"]);
+    const codecs = capabilities.codecs as CodecCapability[];
+    const h264Codecs = codecs.filter((codec) => {
+      if (codec.mimeType.toLowerCase() !== "video/h264") return false;
+      const profile =
+        codec.sdpFmtpLine?.toLowerCase().match(/profile-level-id=([0-9a-f]+)/)?.[1] ??
+        null;
+      return !profile || allowedProfiles.has(profile);
+    });
+
+    if (!h264Codecs.length) return;
+
+    const payloadTypes = new Set(
+      h264Codecs
+        .map((codec) => codec.preferredPayloadType)
+        .filter((pt): pt is number => typeof pt === "number")
+    );
+
+    const rtxCodecs = codecs.filter(
+      (codec) =>
+        codec.mimeType.toLowerCase() === "video/rtx" &&
+        codec.sdpFmtpLine &&
+        Array.from(payloadTypes).some((pt) => codec.sdpFmtpLine!.includes(`apt=${pt}`))
+    );
+
+    const preferredCodecs: CodecPreference[] = [...h264Codecs, ...rtxCodecs].map(
+      (codec) => ({
+        mimeType: codec.mimeType,
+        clockRate: codec.clockRate ?? 90000,
+        channels: codec.channels,
+        sdpFmtpLine: codec.sdpFmtpLine,
+      })
+    );
+
+    pc.getTransceivers()
+      .filter(
+        (transceiver) =>
+          transceiver.receiver.track?.kind === "video" ||
+          transceiver.sender.track?.kind === "video"
+      )
+      .forEach((transceiver) => {
+        try {
+          transceiver.setCodecPreferences(preferredCodecs as RTCRtpCodecCapability[]);
+        } catch (error) {
+          console.warn("[RTC] failed to set codec preferences", error);
+        }
+      });
+
+    if (DEBUG_CALLS) {
+      console.log("[RTC] enforcing H264 codecs", preferredCodecs);
+    }
+  }, []);
+
   const createOffer = useCallback(async (targetUserId: string) => {
     const pc = await ensurePeerConnection(targetUserId);
 
@@ -281,6 +359,7 @@ export function usePeerConnection({
       }
     });
 
+    enforceH264Codecs(pc);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
@@ -289,13 +368,17 @@ export function usePeerConnection({
     }
 
     return offer;
-  }, [ensurePeerConnection, obtainLocalStream]);
+  }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs]);
 
   
   const acceptOffer = useCallback(async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
     const pc = await ensurePeerConnection(targetUserId);
 
     await pc.setRemoteDescription(offer);
+    if (DEBUG_CALLS) {
+      console.log("REMOTE OFFER SDP:\n", pc.remoteDescription?.sdp);
+    }
+    enforceH264Codecs(pc);
 
     const stream = await obtainLocalStream();
     const senders = pc.getSenders();
@@ -312,7 +395,7 @@ export function usePeerConnection({
     await pc.setLocalDescription(answer);
 
     return answer;
-  }, [ensurePeerConnection, obtainLocalStream]);
+  }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs]);
 
 
   
