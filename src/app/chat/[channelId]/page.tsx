@@ -11,6 +11,8 @@ import { usePeerConnection } from "@/hooks/usePeerConnection";
 import { CallPanel } from "@/components/CallPanel";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000";
+const STT_WS_URL =
+  process.env.NEXT_PUBLIC_STT_WS_URL || "ws://localhost:8080/ws-stt";
 
 type ChatMessage =
   | { type: "system"; text: string; ts?: number }
@@ -96,6 +98,8 @@ export default function ChannelChatPage({
   const stickToBottomRef = useRef(true);
   const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const outgoingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sttSocketRef = useRef<WebSocket | null>(null);
+  const sttActiveCallIdRef = useRef<string | null>(null);
 
   const pushSystemMessage = useCallback((text: string, isError = false) => {
     setMessages((prev) => [
@@ -136,6 +140,76 @@ export default function ChannelChatPage({
     [channelId, sendSocketPayload, senderName]
   );
 
+  const stopSttSession = useCallback(() => {
+    const socket = sttSocketRef.current;
+    const callId = sttActiveCallIdRef.current;
+    if (!socket) {
+      sttActiveCallIdRef.current = null;
+      return;
+    }
+
+    const sendStopAndClose = () => {
+      if (callId && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "stt-stop", callId }));
+      }
+      socket.close();
+    };
+
+    if (socket.readyState === WebSocket.CONNECTING) {
+      socket.addEventListener("open", sendStopAndClose, { once: true });
+    } else {
+      sendStopAndClose();
+    }
+  }, []);
+
+  const startSttSession = useCallback(
+    (callId: string) => {
+      if (!callId || sttActiveCallIdRef.current === callId) return;
+
+      stopSttSession();
+
+      const socket = new WebSocket(STT_WS_URL);
+      sttSocketRef.current = socket;
+      sttActiveCallIdRef.current = callId;
+
+      socket.addEventListener("close", () => {
+        if (sttSocketRef.current === socket) {
+          sttSocketRef.current = null;
+          sttActiveCallIdRef.current = null;
+        }
+      });
+
+      if (process.env.NODE_ENV !== "production") {
+        socket.addEventListener("message", (event) => {
+          console.log("[STT] message:", event.data);
+        });
+      }
+
+      socket.addEventListener("error", (event) => {
+        console.error("[STT] websocket error", event, error);
+      });
+
+      const startPayload = {
+        type: "stt-start",
+        callId,
+        channelId,
+        userId: currentUserId ?? "anonymous",
+        language: "en",
+      };
+
+      const sendStart = () => {
+        socket.send(JSON.stringify(startPayload));
+      };
+
+      if (socket.readyState === WebSocket.OPEN) {
+        sendStart();
+      } else {
+        socket.addEventListener("open", sendStart, { once: true });
+      }
+    },
+    [channelId, currentUserId, stopSttSession]
+  );
+
   const signalSender = useCallback(
     (payload: {
       type: string;
@@ -167,6 +241,7 @@ export default function ChannelChatPage({
     state: peerState,
     toggleMuteRemote,
     toggleMuteSelf,
+    sessionId: peerSessionId,
   } = usePeerConnection({
     channelId,
     currentName: senderName,
@@ -178,6 +253,20 @@ export default function ChannelChatPage({
       }
     },
   });
+
+  useEffect(() => {
+    if (activeCall && peerSessionId) {
+      startSttSession(peerSessionId);
+    } else {
+      stopSttSession();
+    }
+  }, [activeCall, peerSessionId, startSttSession, stopSttSession]);
+
+  useEffect(() => {
+    return () => {
+      stopSttSession();
+    };
+  }, [stopSttSession]);
 
 
   const clearIncomingTimer = () => {

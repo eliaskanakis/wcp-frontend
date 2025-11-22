@@ -54,6 +54,7 @@ export function usePeerConnection({
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const targetUserIdRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string>(createSessionId());
+  const [sessionId, setSessionId] = useState(sessionIdRef.current);
   const pendingRemoteCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   const [state, setState] = useState<PeerConnectionState>({
@@ -83,6 +84,7 @@ export function usePeerConnection({
       }
 
       sessionIdRef.current = createSessionId();
+      setSessionId(sessionIdRef.current);
 
       const PC_CONFIG = {
         iceServers: [
@@ -467,6 +469,7 @@ type RTCRtpCodecCapability = CodecPreference;
     state,
     toggleMuteSelf,
     toggleMuteRemote,
+    sessionId,
   };
 }
 
