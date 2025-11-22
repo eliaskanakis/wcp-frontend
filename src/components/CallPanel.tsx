@@ -57,6 +57,7 @@ type CallPanelProps = {
   onToggleCc: () => void;
   ccHistory: string[];
   ccPartial: string;
+  ccSummary: string;
 };
 
 export function CallPanel({
@@ -72,6 +73,7 @@ export function CallPanel({
   onToggleCc,
   ccHistory,
   ccPartial,
+  ccSummary,
 }: CallPanelProps) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -198,7 +200,14 @@ export function CallPanel({
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Live captions
             </p>
-            <div className="mt-2 space-y-1 text-sm leading-relaxed text-slate-900">
+            <div
+              className="mt-2 max-h-32 space-y-1 overflow-y-auto text-sm leading-relaxed text-slate-900"
+              ref={(node) => {
+                if (node) {
+                  node.scrollTop = node.scrollHeight;
+                }
+              }}
+            >
               {ccHistory.map((line, index) => (
                 <p key={`cc-final-${index}`}>{line}</p>
               ))}
@@ -206,6 +215,14 @@ export function CallPanel({
                 <p className="italic text-slate-600">{ccPartial}</p>
               )}
             </div>
+          </div>
+        )}
+        {ccSummary && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 text-sm text-emerald-900">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
+              Summary
+            </p>
+            <p className="mt-2 leading-relaxed">{ccSummary}</p>
           </div>
         )}
       </div>

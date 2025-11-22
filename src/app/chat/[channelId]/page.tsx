@@ -90,6 +90,8 @@ export default function ChannelChatPage({
   const [isCcEnabled, setIsCcEnabled] = useState(false);
   const [ccHistory, setCcHistory] = useState<string[]>([]);
   const [ccPartial, setCcPartial] = useState("");
+  const [ccSummary, setCcSummary] = useState("");
+  const [sttCallId, setSttCallId] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -160,6 +162,8 @@ export default function ChannelChatPage({
         } else {
           setCcPartial(text);
         }
+      } else if (msg.type === "stt-summary" && typeof msg.text === "string") {
+        setCcSummary(msg.text);
       }
     } catch (error) {
       console.warn("[STT] failed to parse message", error);
@@ -190,7 +194,7 @@ export default function ChannelChatPage({
             callId,
             seq: sttSeqRef.current++,
             data: base64,
-            userName: activeCall?.username ?? senderName,
+            username: activeCall?.username ?? senderName,
           })
         );
       };
@@ -208,6 +212,8 @@ export default function ChannelChatPage({
       stopAudioCapture();
       setCcHistory([]);
       setCcPartial("");
+      setCcSummary("");
+      setSttCallId(null);
     };
 
     if (!socket) {
@@ -236,10 +242,14 @@ export default function ChannelChatPage({
 
       stopSttSession();
       sttSeqRef.current = 0;
+      setCcHistory([]);
+      setCcPartial("");
+      setCcSummary("");
 
       const socket = new WebSocket(STT_WS_URL);
       sttSocketRef.current = socket;
       sttActiveCallIdRef.current = callId;
+      setSttCallId(callId);
 
       socket.addEventListener("close", () => {
         if (sttSocketRef.current === socket) {
@@ -325,11 +335,27 @@ export default function ChannelChatPage({
   });
 
   useEffect(() => {
+    let canceled = false;
     if (activeCall && peerSessionId && isCcEnabled) {
-      startSttSession(peerSessionId);
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(() => {
+          if (!canceled) {
+            startSttSession(peerSessionId);
+          }
+        });
+      } else {
+        window.setTimeout(() => {
+          if (!canceled) {
+            startSttSession(peerSessionId);
+          }
+        }, 0);
+      }
     } else {
       stopSttSession();
     }
+    return () => {
+      canceled = true;
+    };
   }, [
     activeCall,
     peerSessionId,
@@ -341,15 +367,12 @@ export default function ChannelChatPage({
   useEffect(() => {
     return () => {
       stopSttSession();
+      setCcSummary("");
     };
   }, [stopSttSession]);
 
   useEffect(() => {
-    if (
-      !isCcEnabled ||
-      !peerState.remoteStream ||
-      !sttActiveCallIdRef.current
-    ) {
+    if (!isCcEnabled || !peerState.remoteStream || !sttCallId) {
       stopAudioCapture();
       return;
     }
@@ -389,7 +412,13 @@ export default function ChannelChatPage({
       recorderRef.current = null;
       captureStream.getTracks().forEach((track) => track.stop());
     };
-  }, [isCcEnabled, peerState.remoteStream, sendAudioChunk, stopAudioCapture]);
+  }, [
+    isCcEnabled,
+    peerState.remoteStream,
+    sendAudioChunk,
+    stopAudioCapture,
+    sttCallId,
+  ]);
 
 
   const clearIncomingTimer = () => {
@@ -1130,6 +1159,7 @@ export default function ChannelChatPage({
           onToggleCc={() => setIsCcEnabled((prev) => !prev)}
           ccHistory={ccHistory}
           ccPartial={ccPartial}
+          ccSummary={ccSummary}
         />
       )}
     </div>
