@@ -337,18 +337,23 @@ export default function ChannelChatPage({
   useEffect(() => {
     let canceled = false;
     if (activeCall && peerSessionId && isCcEnabled) {
-      if ("requestIdleCallback" in window) {
-        window.requestIdleCallback(() => {
+      const schedule = typeof window !== "undefined" ? window.requestIdleCallback?.bind(window) : undefined;
+      if (schedule) {
+        schedule(() => {
           if (!canceled) {
             startSttSession(peerSessionId);
           }
         });
       } else {
-        window.setTimeout(() => {
+        const timeoutId = setTimeout(() => {
           if (!canceled) {
             startSttSession(peerSessionId);
           }
         }, 0);
+        return () => {
+          canceled = true;
+          clearTimeout(timeoutId);
+        };
       }
     } else {
       stopSttSession();
