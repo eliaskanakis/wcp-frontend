@@ -54,6 +54,7 @@ export function usePeerConnection({
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const targetUserIdRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string>(createSessionId());
+  const pendingRemoteCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   const [state, setState] = useState<PeerConnectionState>({
     localStream: null,
@@ -284,6 +285,19 @@ type RTCRtpCodecCapability = CodecPreference;
     }
   }, [onError]);
 
+  const flushRemoteCandidates = useCallback(async (pc: RTCPeerConnection) => {
+    if (!pendingRemoteCandidatesRef.current.length) return;
+    const candidates = pendingRemoteCandidatesRef.current;
+    pendingRemoteCandidatesRef.current = [];
+    for (const candidate of candidates) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error("Failed to add queued remote ICE candidate", error);
+      }
+    }
+  }, []);
+
   const enforceH264Codecs = useCallback((pc: RTCPeerConnection) => {
     if (typeof RTCRtpSender === "undefined" || !RTCRtpSender.getCapabilities) {
       return;
@@ -375,6 +389,7 @@ type RTCRtpCodecCapability = CodecPreference;
     const pc = await ensurePeerConnection(targetUserId);
 
     await pc.setRemoteDescription(offer);
+    await flushRemoteCandidates(pc);
     if (DEBUG_CALLS) {
       console.log("REMOTE OFFER SDP:\n", pc.remoteDescription?.sdp);
     }
@@ -393,25 +408,41 @@ type RTCRtpCodecCapability = CodecPreference;
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+    if (DEBUG_CALLS) {
+      console.log("LOCAL ANSWER SDP:\n", pc.localDescription?.sdp);
+    }
 
     return answer;
-  }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs]);
+  }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs, flushRemoteCandidates]);
 
 
   
   const handleAnswer = useCallback(async (answer: RTCSessionDescriptionInit) => {
     if (!peerRef.current) return;
     await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-  }, []);
+    await flushRemoteCandidates(peerRef.current);
+  }, [flushRemoteCandidates]);
 
-  const handleRemoteIce = useCallback(async (candidate: RTCIceCandidateInit) => {
-    if (!peerRef.current || !candidate) return;
-    try {
-      await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (error) {
-      console.error("Failed to add remote ICE candidate", error);
-    }
-  }, []);
+  const handleRemoteIce = useCallback(
+    async (candidate: RTCIceCandidateInit) => {
+      if (!candidate) return;
+      const pc = peerRef.current;
+      if (!pc || !pc.remoteDescription) {
+        pendingRemoteCandidatesRef.current.push(candidate);
+        if (DEBUG_CALLS) {
+          console.log("[RTC] queued remote ICE", candidate);
+        }
+        return;
+      }
+
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error("Failed to add remote ICE candidate", error);
+      }
+    },
+    []
+  );
 
   const endCall = useCallback(() => {
     peerRef.current?.getSenders().forEach((sender) => sender.track?.stop());
