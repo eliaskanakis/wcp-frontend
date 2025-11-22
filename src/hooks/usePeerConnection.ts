@@ -144,104 +144,34 @@ export function usePeerConnection({
       pc.ontrack = (event) => {
         if (DEBUG_CALLS) {
           console.log("[RTC] ontrack", {
-            kind: event.track.kind,
-            id: event.track.id,
+            track: event.track.kind,
             muted: event.track.muted,
-            streamIds: event.streams.map((s) => s.id),
+            streams: event.streams?.length ?? 0,
           });
         }
 
-        // Helper to force re-attach & play remote video
-        const forcePlayRemote = (stream: MediaStream) => {
-          setTimeout(() => {
-            const el = document.getElementById("remoteVideo") as HTMLVideoElement | null;
-            if (!el) return;
-            el.srcObject = stream;
-            el.muted = state.isRemoteMuted; // your setting
-            el
-              .play()
-              .catch((e) => console.warn("[RTC] remote video play() failed:", e));
-          }, 50);
+        const assignStream = () => {
+          let stream: MediaStream;
+          if (event.streams && event.streams[0]) {
+            stream = event.streams[0];
+          } else {
+            stream = new MediaStream();
+            stream.addTrack(event.track);
+          }
+          remoteStreamRef.current = stream;
+          setState((prev) => ({ ...prev, remoteStream: stream }));
+          onPeerEvent?.("remote-track", event.track.kind);
         };
 
-        // ----------------------------------------------------------
-        // CASE 1 — SAFARI / ANDROID: event.streams[0] MUST BE USED
-        // ----------------------------------------------------------
-        if (event.streams && event.streams[0]) {
-          const incomingStream = event.streams[0];
-
-          // Bind immediately if new or if this is the video track coming in
-          if (!remoteStreamRef.current || event.track.kind === "video") {
-            remoteStreamRef.current = incomingStream;
-            setState((prev) => ({ ...prev, remoteStream: incomingStream }));
-            forcePlayRemote(incomingStream);
-          }
-
-          // Safari muted video problem
-          if (event.track.kind === "video") {
-            if (event.track.muted) {
-              console.log("[RTC] video muted → requesting keyframe");
-
-              const receiver = pc
-                .getReceivers()
-                .find((r) => r.track?.kind === "video");
-
-              try {
-                (receiver as any)?.requestKeyFrame?.();
-              } catch (_) { }
-
-              event.track.onunmute = () => {
-                console.log("[RTC] video track unmuted!");
-                event.track.onunmute = null;
-
-                remoteStreamRef.current = incomingStream;
-                setState((prev) => ({ ...prev, remoteStream: incomingStream }));
-                forcePlayRemote(incomingStream);
-              };
-            }
-          }
-
-          return; // 🚀 DO NOT fall into fallback logic
-        }
-
-        // ----------------------------------------------------------
-        // CASE 2 — CHROME DESKTOP: no event.streams → manual merge
-        // ----------------------------------------------------------
-        if (!remoteStreamRef.current) {
-          remoteStreamRef.current = new MediaStream();
-          setState((prev) => ({ ...prev, remoteStream: remoteStreamRef.current! }));
-        }
-
-        const compositeStream = remoteStreamRef.current;
-
-        // Avoid duplicates
-        if (!compositeStream.getTracks().some((t) => t.id === event.track.id)) {
-          compositeStream.addTrack(event.track);
-        }
-
-        if (event.track.kind === "video" && event.track.muted) {
-          console.log("[RTC] video muted → requesting keyframe (fallback)");
-
-          const receiver = pc
-            .getReceivers()
-            .find((r) => r.track?.kind === "video");
-
-          try {
-            (receiver as any)?.requestKeyFrame?.();
-          } catch (_) { }
-
+        if (event.track.muted) {
           event.track.onunmute = () => {
-            console.log("[RTC] video track unmuted!");
             event.track.onunmute = null;
-
-            remoteStreamRef.current = compositeStream;
-            setState((prev) => ({ ...prev, remoteStream: compositeStream }));
-            forcePlayRemote(compositeStream);
+            assignStream();
           };
+          return;
         }
 
-        setState((prev) => ({ ...prev, remoteStream: compositeStream }));
-        forcePlayRemote(compositeStream);
+        assignStream();
       };
 
       pc.onconnectionstatechange = () => {
@@ -359,52 +289,39 @@ export function usePeerConnection({
     const pc = await ensurePeerConnection(targetUserId);
 
     const stream = await obtainLocalStream();
-
-    // Safari FIX — start flow
-    const videoTrack = stream.getVideoTracks()[0];
-    if (videoTrack) {
-      const dummy = document.createElement("video");
-      dummy.srcObject = new MediaStream([videoTrack]);
-      dummy.muted = true;
-      dummy.play().catch(() => { });
-    }
-
-    stream.getTracks().forEach(track => {
-      const senderExists = pc.getSenders().some(
-        sender => sender.track?.kind === track.kind
-      );
-      if (!senderExists) {
+    const senders = pc.getSenders();
+    stream.getTracks().forEach((track) => {
+      const existing = senders.find((sender) => sender.track?.kind === track.kind);
+      if (existing) {
+        existing.replaceTrack(track);
+      } else {
         pc.addTrack(track, stream);
       }
     });
 
-    let offer = await pc.createOffer({
-      offerToReceiveAudio: true,
-      offerToReceiveVideo: true,
-    });
-
+    const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+
     if (DEBUG_CALLS) {
-      console.log("LOCAL ANSWER SDP:\n", pc.localDescription?.sdp);
+      console.log("LOCAL OFFER SDP:\n", pc.localDescription?.sdp);
     }
 
     return offer;
   }, [ensurePeerConnection, obtainLocalStream]);
 
+  
   const acceptOffer = useCallback(async (offer: RTCSessionDescriptionInit, targetUserId: string) => {
     const pc = await ensurePeerConnection(targetUserId);
 
-    if (DEBUG_CALLS) {
-      console.log("REMOTE OFFER SDP:\n", offer);
-    }
     await pc.setRemoteDescription(offer);
 
     const stream = await obtainLocalStream();
-    stream.getTracks().forEach(track => {
-      const senderExists = pc.getSenders().some(
-        sender => sender.track?.kind === track.kind
-      );
-      if (!senderExists) {
+    const senders = pc.getSenders();
+    stream.getTracks().forEach((track) => {
+      const existing = senders.find((sender) => sender.track?.kind === track.kind);
+      if (existing) {
+        existing.replaceTrack(track);
+      } else {
         pc.addTrack(track, stream);
       }
     });
@@ -412,24 +329,11 @@ export function usePeerConnection({
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    pc.getReceivers()
-      .filter(r => r.track?.kind === "video")
-      .forEach(r => {
-        try {
-          (r as any).requestKeyFrame?.();
-          console.log("[RTC] forced keyframe after answer");
-        } catch (e) { }
-      });
-
-    if (DEBUG_CALLS) {
-      console.log("LOCAL ANSWER SDP:\n", pc.localDescription?.sdp);
-    }
-
     return answer;
   }, [ensurePeerConnection, obtainLocalStream]);
 
 
-
+  
   const handleAnswer = useCallback(async (answer: RTCSessionDescriptionInit) => {
     if (!peerRef.current) return;
     await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
