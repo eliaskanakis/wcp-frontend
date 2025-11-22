@@ -53,6 +53,10 @@ type CallPanelProps = {
   onToggleRemoteMute: () => void;
   onEndCall: () => void;
   title: string;
+  ccEnabled: boolean;
+  onToggleCc: () => void;
+  ccHistory: string[];
+  ccPartial: string;
 };
 
 export function CallPanel({
@@ -64,6 +68,10 @@ export function CallPanel({
   onToggleRemoteMute,
   onEndCall,
   title,
+  ccEnabled,
+  onToggleCc,
+  ccHistory,
+  ccPartial,
 }: CallPanelProps) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -174,7 +182,32 @@ export function CallPanel({
           >
             {isRemoteMuted ? "Hear remote" : "Silence remote"}
           </button>
+          <button
+            onClick={onToggleCc}
+            className={`rounded-full border px-4 py-1.5 transition ${
+              ccEnabled
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border-slate-200 text-slate-700 hover:border-slate-300"
+            }`}
+          >
+            {ccEnabled ? "CC on" : "CC off"}
+          </button>
         </div>
+        {(ccHistory.length > 0 || ccPartial) && (
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Live captions
+            </p>
+            <div className="mt-2 space-y-1 text-sm leading-relaxed text-slate-900">
+              {ccHistory.map((line, index) => (
+                <p key={`cc-final-${index}`}>{line}</p>
+              ))}
+              {ccPartial && (
+                <p className="italic text-slate-600">{ccPartial}</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

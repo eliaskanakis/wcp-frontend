@@ -87,6 +87,9 @@ export default function ChannelChatPage({
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [outgoingCall, setOutgoingCall] = useState<ActiveCall | null>(null);
+  const [isCcEnabled, setIsCcEnabled] = useState(false);
+  const [ccHistory, setCcHistory] = useState<string[]>([]);
+  const [ccPartial, setCcPartial] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -100,6 +103,8 @@ export default function ChannelChatPage({
   const outgoingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sttSocketRef = useRef<WebSocket | null>(null);
   const sttActiveCallIdRef = useRef<string | null>(null);
+  const sttSeqRef = useRef(0);
+  const recorderRef = useRef<MediaRecorder | null>(null);
 
   const pushSystemMessage = useCallback((text: string, isError = false) => {
     setMessages((prev) => [
@@ -140,11 +145,73 @@ export default function ChannelChatPage({
     [channelId, sendSocketPayload, senderName]
   );
 
+  const handleSttSocketMessage = useCallback((raw: string) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === "stt-partial" || msg.type === "stt-final") {
+        const text = typeof msg.text === "string" ? msg.text : "";
+        const isFinal =
+          msg.type === "stt-final" || Boolean(msg.isFinal);
+        if (isFinal) {
+          setCcHistory((prev) =>
+            [...prev.slice(-4), text].filter(Boolean)
+          );
+          setCcPartial("");
+        } else {
+          setCcPartial(text);
+        }
+      }
+    } catch (error) {
+      console.warn("[STT] failed to parse message", error);
+    }
+  }, []);
+
+  const stopAudioCapture = useCallback(() => {
+    if (recorderRef.current) {
+      const recorder = recorderRef.current;
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      }
+      recorderRef.current = null;
+    }
+  }, []);
+  const sendAudioChunk = useCallback(
+    (blob: Blob) => {
+      const socket = sttSocketRef.current;
+      const callId = sttActiveCallIdRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN || !callId) return;
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        const base64 = result.split(",")[1] ?? "";
+        socket.send(
+          JSON.stringify({
+            type: "stt-audio-chunk",
+            callId,
+            seq: sttSeqRef.current++,
+            data: base64,
+            userName: activeCall?.username ?? senderName,
+          })
+        );
+      };
+      reader.readAsDataURL(blob);
+    },
+    [activeCall?.username, senderName]
+  );
+
   const stopSttSession = useCallback(() => {
     const socket = sttSocketRef.current;
     const callId = sttActiveCallIdRef.current;
-    if (!socket) {
+
+    const resetState = () => {
       sttActiveCallIdRef.current = null;
+      stopAudioCapture();
+      setCcHistory([]);
+      setCcPartial("");
+    };
+
+    if (!socket) {
+      resetState();
       return;
     }
 
@@ -153,6 +220,7 @@ export default function ChannelChatPage({
         socket.send(JSON.stringify({ type: "stt-stop", callId }));
       }
       socket.close();
+      resetState();
     };
 
     if (socket.readyState === WebSocket.CONNECTING) {
@@ -160,13 +228,14 @@ export default function ChannelChatPage({
     } else {
       sendStopAndClose();
     }
-  }, []);
+  }, [stopAudioCapture]);
 
   const startSttSession = useCallback(
     (callId: string) => {
       if (!callId || sttActiveCallIdRef.current === callId) return;
 
       stopSttSession();
+      sttSeqRef.current = 0;
 
       const socket = new WebSocket(STT_WS_URL);
       sttSocketRef.current = socket;
@@ -179,14 +248,15 @@ export default function ChannelChatPage({
         }
       });
 
-      if (process.env.NODE_ENV !== "production") {
-        socket.addEventListener("message", (event) => {
+      socket.addEventListener("message", (event) => {
+        if (process.env.NODE_ENV !== "production") {
           console.log("[STT] message:", event.data);
-        });
-      }
+        }
+        handleSttSocketMessage(event.data);
+      });
 
       socket.addEventListener("error", (event) => {
-        console.error("[STT] websocket error", event, error);
+        console.error("[STT] websocket error", event);
       });
 
       const startPayload = {
@@ -207,7 +277,7 @@ export default function ChannelChatPage({
         socket.addEventListener("open", sendStart, { once: true });
       }
     },
-    [channelId, currentUserId, stopSttSession]
+    [channelId, currentUserId, handleSttSocketMessage, stopSttSession]
   );
 
   const signalSender = useCallback(
@@ -255,18 +325,71 @@ export default function ChannelChatPage({
   });
 
   useEffect(() => {
-    if (activeCall && peerSessionId) {
+    if (activeCall && peerSessionId && isCcEnabled) {
       startSttSession(peerSessionId);
     } else {
       stopSttSession();
     }
-  }, [activeCall, peerSessionId, startSttSession, stopSttSession]);
+  }, [
+    activeCall,
+    peerSessionId,
+    isCcEnabled,
+    startSttSession,
+    stopSttSession,
+  ]);
 
   useEffect(() => {
     return () => {
       stopSttSession();
     };
   }, [stopSttSession]);
+
+  useEffect(() => {
+    if (
+      !isCcEnabled ||
+      !peerState.remoteStream ||
+      !sttActiveCallIdRef.current
+    ) {
+      stopAudioCapture();
+      return;
+    }
+
+    const audioTracks = peerState.remoteStream.getAudioTracks();
+    if (!audioTracks.length) {
+      stopAudioCapture();
+      return;
+    }
+
+    const captureStream = new MediaStream();
+    audioTracks.forEach((track) => captureStream.addTrack(track));
+
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(captureStream, {
+        mimeType: "audio/webm;codecs=opus",
+      });
+    } catch (error) {
+      console.warn("[STT] unable to start MediaRecorder", error);
+      captureStream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    recorderRef.current = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        sendAudioChunk(event.data);
+      }
+    };
+    recorder.start(1000);
+
+    return () => {
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      }
+      recorderRef.current = null;
+      captureStream.getTracks().forEach((track) => track.stop());
+    };
+  }, [isCcEnabled, peerState.remoteStream, sendAudioChunk, stopAudioCapture]);
 
 
   const clearIncomingTimer = () => {
@@ -289,8 +412,12 @@ export default function ChannelChatPage({
     setIncomingCall(null);
     setOutgoingCall(null);
     setActiveCall(null);
+    setIsCcEnabled(false);
+    setCcHistory([]);
+    setCcPartial("");
+    stopSttSession();
     endPeerConnection();
-  }, [endPeerConnection]);
+  }, [endPeerConnection, stopSttSession]);
 
   const handleAnswerRef = useRef(handleAnswer);
   const handleRemoteIceRef = useRef(handleRemoteIce);
@@ -999,6 +1126,10 @@ export default function ChannelChatPage({
           onToggleSelfMute={toggleMuteSelf}
           onToggleRemoteMute={toggleMuteRemote}
           onEndCall={endActiveCall}
+          ccEnabled={isCcEnabled}
+          onToggleCc={() => setIsCcEnabled((prev) => !prev)}
+          ccHistory={ccHistory}
+          ccPartial={ccPartial}
         />
       )}
     </div>
