@@ -98,25 +98,6 @@ export function usePeerConnection({
 
       const pc = new RTCPeerConnection(PC_CONFIG);
 
-      // ------------------ SAFARI → CHROME H264 BASELINE FIX ------------------
-      try {
-        const videoReceiverCaps = RTCRtpReceiver.getCapabilities("video")?.codecs ?? [];
-
-        // Safari offers many H.264 profiles, Chrome only reliably decodes Baseline
-        const baselineCodecs = videoReceiverCaps.filter(c =>
-          c.mimeType.toLowerCase() === "video/h264" &&
-          c.sdpFmtpLine?.toLowerCase().includes("profile-level-id=42e01f")
-        );
-
-        if (DEBUG_CALLS) {
-          console.log("[RTC] baseline codecs", baselineCodecs);
-        }
-
-      } catch (err) {
-        console.warn("[RTC] codec preference setup failed", err);
-      }
-      // ------------------------------------------------------------------------
-
 
       if (DEBUG_CALLS) {
         console.log("[RTC] pc-created", {
@@ -373,13 +354,9 @@ type RTCRtpCodecCapability = CodecPreference;
       }
     });
 
-    enforceH264Codecs(pc);
+    //enforceH264Codecs(pc);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-
-    if (DEBUG_CALLS) {
-      console.log("LOCAL OFFER SDP:\n", pc.localDescription?.sdp);
-    }
 
     return offer;
   }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs]);
@@ -390,10 +367,7 @@ type RTCRtpCodecCapability = CodecPreference;
 
     await pc.setRemoteDescription(offer);
     await flushRemoteCandidates(pc);
-    if (DEBUG_CALLS) {
-      console.log("REMOTE OFFER SDP:\n", pc.remoteDescription?.sdp);
-    }
-    enforceH264Codecs(pc);
+    //enforceH264Codecs(pc);
 
     const stream = await obtainLocalStream();
     const senders = pc.getSenders();
@@ -408,9 +382,6 @@ type RTCRtpCodecCapability = CodecPreference;
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    if (DEBUG_CALLS) {
-      console.log("LOCAL ANSWER SDP:\n", pc.localDescription?.sdp);
-    }
 
     return answer;
   }, [ensurePeerConnection, obtainLocalStream, enforceH264Codecs, flushRemoteCandidates]);
@@ -493,3 +464,4 @@ type RTCRtpCodecCapability = CodecPreference;
     toggleMuteRemote,
   };
 }
+
