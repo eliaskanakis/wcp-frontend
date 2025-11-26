@@ -1,36 +1,42 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# WRH Coordination Platform – Frontend
+
+Next.js/Turbopack client for the WRH coordination suite. It delivers:
+
+- Firebase-authenticated channel chat with participants management.
+- One-to-one WebRTC calls (Safari/Chrome hardened).
+- Optional live captions powered by the STT server (remote audio streaming + summaries).
+- Round-trip latency indicator for the signaling WebSocket.
+
+## Live Demo
+
+Production instance: https://wrh-coord-platform.web.app/
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Visit `http://localhost:3000` and create a channel (or join an existing one).  
+To enable captions, set `NEXT_PUBLIC_STT_WS_URL` to the FastAPI server’s `/ws-stt` endpoint; otherwise the CC toggle stays off.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Related Repositories
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- [wcp-chat-server](https://github.com/eliaskanakis/wcp-chat-server) – Node.js WebSocket & Firebase bridge.
+- [wcp-stt-server](https://github.com/eliaskanakis/wcp-stt-server) – FastAPI STT mock that receives audio chunks.
 
-## Learn More
+## Demo Video
 
-To learn more about Next.js, take a look at the following resources:
+🎬 [Watch the walkthrough on YouTube](https://www.youtube.com/xxxxxxxxxxx) _(placeholder link)_.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deployment
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The project publishes through Firebase Hosting (`firebase deploy`) using the production build:
 
-## Deploy on Vercel
+```bash
+npm run build
+npm run start   # optional local preview
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Ensure the chat server and STT server URLs are set via `NEXT_PUBLIC_WS_URL` and `NEXT_PUBLIC_STT_WS_URL` before deploying.

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { doc, updateDoc } from "firebase/firestore";
 import { useAuth } from "@/context/AuthContext";
 import { useChannels } from "@/context/ChannelsContext";
@@ -33,7 +33,8 @@ type OutboundMessageType =
   | "webrtc-ice"
   | "call-cancelled"
   | "call-rejected"
-  | "call-ended";
+  | "call-ended"
+  | "ping";
 
 type OutboundMessage = {
   type: OutboundMessageType;
@@ -46,6 +47,8 @@ type OutboundMessage = {
   sdp?: RTCSessionDescriptionInit;
   ice?: RTCIceCandidateInit;
   reason?: string;
+  clientTs?: number;
+  serverTs?: number;
 };
 
 type IncomingCall = {
@@ -92,6 +95,7 @@ export default function ChannelChatPage({
   const [ccPartial, setCcPartial] = useState("");
   const [ccSummary, setCcSummary] = useState("");
   const [sttCallId, setSttCallId] = useState<string | null>(null);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -146,6 +150,18 @@ export default function ChannelChatPage({
     },
     [channelId, sendSocketPayload, senderName]
   );
+
+  const sendPing = useCallback(() => {
+
+    sendCallSignal("ping", { clientTs:Date.now() });
+  }, [sendCallSignal]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      sendPing();
+    }, 15000);
+    return () => clearInterval(intervalId);
+  }, [sendPing]);
 
   const handleSttSocketMessage = useCallback((raw: string) => {
     try {
@@ -541,12 +557,12 @@ export default function ChannelChatPage({
                       ts: item.ts,
                     })
                   )
-                  .sort((a, b) => b.ts - a.ts)
+                  .sort((a, b) => a.ts - b.ts)
               : [];
           setMessages((prev) => [...nextMessages, ...prev]);
           if (nextMessages.length > 0) {
             oldestMessageTsRef.current =
-              nextMessages[nextMessages.length - 1].ts;
+              nextMessages[0].ts;
           }
           setHistoryLoaded(true);
         } else if (msg.type === "channel-users") {
@@ -628,6 +644,11 @@ export default function ChannelChatPage({
             `${msg.from} ended the call.`,
           );
           resetCallStateRef.current?.();
+        } else if (msg.type === "pong") {
+          const clientTs = Number(msg.clientTs);
+          if (!Number.isNaN(clientTs)) {
+            setLatencyMs(Date.now() - clientTs);
+          }
         }
       } catch (error) {
         console.error("Invalid websocket payload", error);
@@ -848,6 +869,25 @@ export default function ChannelChatPage({
     sendCallSignal,
   ]);
 
+  const statusBadgeClass =
+    status === "connected"
+      ? "bg-emerald-100 text-emerald-700"
+      : status === "connecting"
+        ? "bg-amber-100 text-amber-700"
+        : status === "error"
+          ? "bg-rose-200 text-rose-800"
+          : "bg-rose-100 text-rose-700";
+  const latencyLabel =
+    latencyMs !== null ? `${latencyMs} ms` : "–";
+  const rosterUnique = useMemo(() => {
+    const seen = new Set<string>();
+    return roster.filter((user) => {
+      if (seen.has(user.userId)) return false;
+      seen.add(user.userId);
+      return true;
+    });
+  }, [roster]);
+
   useEffect(() => {
     return () => {
       clearIncomingTimer();
@@ -881,15 +921,6 @@ export default function ChannelChatPage({
     );
   }
 
-  const statusBadgeClass =
-    status === "connected"
-      ? "bg-emerald-100 text-emerald-700"
-      : status === "connecting"
-        ? "bg-amber-100 text-amber-700"
-        : status === "error"
-          ? "bg-rose-200 text-rose-800"
-          : "bg-rose-100 text-rose-700";
-
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-8 sm:px-6 lg:px-8">
       <header className="flex flex-wrap items-center gap-3 rounded-3xl border border-slate-200 bg-white/90 px-4 py-3 text-sm shadow-sm backdrop-blur">
@@ -903,6 +934,9 @@ export default function ChannelChatPage({
           className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadgeClass}`}
         >
           {status}
+        </span>
+        <span className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600">
+          RTT: {latencyLabel}
         </span>
         <button
           onClick={() => setRosterOpen((prev) => !prev)}
@@ -1027,12 +1061,12 @@ export default function ChannelChatPage({
               Active users
             </p>
             <span className="text-xs font-semibold text-slate-400">
-              {roster.length}
+              {rosterUnique.length}
             </span>
           </div>
           <ul className="mt-4 space-y-3 text-sm">
             {roster.length > 0 ? (
-              roster.map((user) => {
+              rosterUnique.map((user) => {
                 const isSelf = profile?.uid === user.userId;
                 return (
                   <li
