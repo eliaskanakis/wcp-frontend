@@ -28,7 +28,7 @@ To enable captions, set `NEXT_PUBLIC_STT_WS_URL` to the FastAPI server’s `/ws-
 
 ## Demo Video
 
-🎬 [Watch the walkthrough on YouTube](https://www.youtube.com/xxxxxxxxxxx) _(placeholder link)_.
+🎬 [Watch the walkthrough on YouTube](https://www.youtube.com/watch?v=nZzlvX0EO1A).
 
 ## Deployment
 
